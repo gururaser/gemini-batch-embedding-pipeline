@@ -1,8 +1,9 @@
 import sqlite3
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 CREATE_SQL = """
 PRAGMA journal_mode=WAL;
@@ -43,6 +44,7 @@ CREATE TABLE IF NOT EXISTS batches (
 
 
 def init_db(db_path: Path) -> None:
+    """Initialize the SQLite database with the required schema."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.executescript(CREATE_SQL)
@@ -50,6 +52,7 @@ def init_db(db_path: Path) -> None:
 
 @contextmanager
 def get_conn(db_path: Path) -> Generator[sqlite3.Connection, None, None]:
+    """Context manager for SQLite database connections."""
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -65,12 +68,14 @@ def get_conn(db_path: Path) -> Generator[sqlite3.Connection, None, None]:
 
 
 def now() -> int:
+    """Return the current Unix timestamp."""
     return int(time.time())
 
 
 # ── records helpers ──────────────────────────────────────────────────────────
 
 def insert_records(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> int:
+    """Insert multiple product records into the database."""
     ts = now()
     cursor = conn.executemany(
         """
@@ -90,6 +95,7 @@ def set_image_status(
     status: str,
     sha256: str | None = None,
 ) -> None:
+    """Update the image download status and SHA256 hash for a specific article."""
     conn.execute(
         """
         UPDATE records
@@ -101,12 +107,14 @@ def set_image_status(
 
 
 def get_pending_image_records(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Retrieve all records that are pending image download."""
     return conn.execute(
         "SELECT article_id, image_url FROM records WHERE image_status = 'pending'"
     ).fetchall()
 
 
 def get_embeddable_records(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Retrieve records that are ready to be embedded."""
     return conn.execute(
         """
         SELECT article_id, point_uuid, image_url, image_sha256, payload_json
@@ -122,32 +130,55 @@ def get_embeddable_records(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 def assign_to_shard(
     conn: sqlite3.Connection, article_ids: list[str], shard_id: int
 ) -> None:
+    """Assign a list of article IDs to a specific shard for batch processing."""
     ts = now()
     conn.executemany(
-        "UPDATE records SET shard_id = ?, embed_status = 'in_batch', updated_at = ? WHERE article_id = ?",
+        """
+        UPDATE records
+        SET shard_id = ?, embed_status = 'in_batch', updated_at = ?
+        WHERE article_id = ?
+        """,
         [(shard_id, ts, aid) for aid in article_ids],
     )
 
 
 def get_pending_shards(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Retrieve all shards that are pending submission to Gemini."""
     return conn.execute(
-        "SELECT shard_id, est_tokens, record_count, request_file FROM batches WHERE state = 'PENDING'"
+        """
+        SELECT shard_id, est_tokens, record_count, request_file
+        FROM batches
+        WHERE state = 'PENDING'
+        """
     ).fetchall()
 
 
 def get_active_batches(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Retrieve all batches currently in progress."""
     return conn.execute(
-        "SELECT batch_id, shard_id, est_tokens, state FROM batches WHERE state IN ('RUNNING', 'SUBMITTED')"
+        """
+        SELECT batch_id, shard_id, est_tokens, state
+        FROM batches
+        WHERE state IN ('RUNNING', 'SUBMITTED')
+        """
     ).fetchall()
 
 
 def get_succeeded_batches(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Retrieve all batches that have successfully completed."""
     return conn.execute(
         "SELECT batch_id, shard_id, result_file FROM batches WHERE state = 'SUCCEEDED'"
     ).fetchall()
 
 
-def insert_batch(conn: sqlite3.Connection, shard_id: int, est_tokens: int, record_count: int, request_file: str) -> None:
+def insert_batch(
+    conn: sqlite3.Connection,
+    shard_id: int,
+    est_tokens: int,
+    record_count: int,
+    request_file: str,
+) -> None:
+    """Create a new batch entry in the database."""
     conn.execute(
         """
         INSERT OR IGNORE INTO batches (shard_id, est_tokens, record_count, request_file, state)
@@ -158,6 +189,7 @@ def insert_batch(conn: sqlite3.Connection, shard_id: int, est_tokens: int, recor
 
 
 def update_batch_submitted(conn: sqlite3.Connection, shard_id: int, batch_id: str) -> None:
+    """Update a batch entry and its associated records when submitted to Gemini."""
     conn.execute(
         """
         UPDATE batches SET batch_id = ?, state = 'SUBMITTED', submitted_at = ?
@@ -174,6 +206,7 @@ def update_batch_submitted(conn: sqlite3.Connection, shard_id: int, batch_id: st
 def update_batch_state(
     conn: sqlite3.Connection, batch_id: str, state: str, result_file: str | None = None
 ) -> None:
+    """Update the state of a batch and handle failures/retries."""
     ts = now()
     conn.execute(
         "UPDATE batches SET state = ?, result_file = ?, finished_at = ? WHERE batch_id = ?",
@@ -192,6 +225,7 @@ def update_batch_state(
 
 
 def mark_embed_ok(conn: sqlite3.Connection, article_id: str) -> None:
+    """Mark an article as successfully embedded."""
     conn.execute(
         "UPDATE records SET embed_status = 'ok', updated_at = ? WHERE article_id = ?",
         (now(), article_id),
@@ -199,6 +233,7 @@ def mark_embed_ok(conn: sqlite3.Connection, article_id: str) -> None:
 
 
 def mark_embed_failed(conn: sqlite3.Connection, article_id: str) -> None:
+    """Mark an article embedding attempt as failed."""
     conn.execute(
         """
         UPDATE records
@@ -210,6 +245,7 @@ def mark_embed_failed(conn: sqlite3.Connection, article_id: str) -> None:
 
 
 def get_upsert_pending(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Retrieve records that have embeddings but are not yet upserted to Qdrant."""
     return conn.execute(
         """
         SELECT article_id, point_uuid, payload_json
@@ -220,6 +256,7 @@ def get_upsert_pending(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def mark_upsert_ok(conn: sqlite3.Connection, article_ids: list[str]) -> None:
+    """Mark multiple articles as successfully upserted to Qdrant."""
     conn.executemany(
         "UPDATE records SET upsert_status = 'ok', updated_at = ? WHERE article_id = ?",
         [(now(), aid) for aid in article_ids],
@@ -227,6 +264,7 @@ def mark_upsert_ok(conn: sqlite3.Connection, article_ids: list[str]) -> None:
 
 
 def get_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Retrieve summary counts for all record statuses."""
     row = conn.execute(
         """
         SELECT

@@ -2,28 +2,34 @@ import asyncio
 import hashlib
 import io
 from pathlib import Path
-from typing import Optional
 
 import httpx
 from PIL import Image
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+from rich import print
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from gme.config import Settings, get_settings
 from gme.state import get_conn, get_pending_image_records, set_image_status
 
 
 def _is_transient(exc: BaseException) -> bool:
+    """Determine if an exception is transient and should be retried."""
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code not in (404, 410)
     return isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError))
 
 
 def _sha256(data: bytes) -> str:
+    """Calculate the SHA256 hash of the given bytes."""
     return hashlib.sha256(data).hexdigest()
 
 
 def _normalize_image(data: bytes, max_side: int) -> bytes:
+    """
+    Open an image, normalize it to RGB if needed, resize it to fit within max_side,
+    and return the JPEG bytes.
+    """
     img = Image.open(io.BytesIO(data))
     img.verify()
     img = Image.open(io.BytesIO(data))  # re-open after verify (verify closes stream)
@@ -46,7 +52,8 @@ async def _download_one(
     max_side: int,
     semaphore: asyncio.Semaphore,
     progress_callback,
-) -> tuple[str, str, Optional[str]]:
+) -> tuple[str, str, str | None]:
+    """Download and process a single image."""
     async with semaphore:
         try:
             status, sha256 = await _fetch_and_save(client, image_url, images_dir, max_side)
@@ -70,6 +77,7 @@ async def _download_one(
 async def _fetch_and_save(
     client: httpx.AsyncClient, image_url: str, images_dir: Path, max_side: int
 ) -> tuple[str, str]:
+    """Fetch an image from a URL, normalize it, and save it to the images directory."""
     response = await client.get(image_url, timeout=30.0, follow_redirects=True)
     response.raise_for_status()
     raw = response.content
@@ -89,6 +97,7 @@ async def _run_async(
     update_fn,
     advance_fn,
 ) -> None:
+    """Run the asynchronous download loop for all records."""
     semaphore = asyncio.Semaphore(concurrency)
     limits = httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency // 2)
 
@@ -111,7 +120,11 @@ async def _run_async(
         update_fn(article_id, status, sha256)
 
 
-def run_download_images(settings: Optional[Settings] = None) -> None:
+def run_download_images(settings: Settings | None = None) -> None:
+    """
+    Orchestrate the download of pending images, updating the database with
+    results and progress.
+    """
     if settings is None:
         settings = get_settings()
 
@@ -126,7 +139,7 @@ def run_download_images(settings: Optional[Settings] = None) -> None:
 
     print(f"Downloading {len(records)} images (concurrency={settings.image_download_concurrency})…")
 
-    results_buffer: list[tuple[str, str, Optional[str]]] = []
+    results_buffer: list[tuple[str, str, str | None]] = []
 
     with Progress(
         SpinnerColumn(),
@@ -138,9 +151,11 @@ def run_download_images(settings: Optional[Settings] = None) -> None:
         task = progress.add_task("Downloading images…", total=len(records))
 
         def advance():
+            """Advance the progress bar."""
             progress.advance(task)
 
         def collect(article_id, status, sha256):
+            """Collect results into the local buffer."""
             results_buffer.append((article_id, status, sha256))
 
         asyncio.run(

@@ -1,4 +1,3 @@
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -13,7 +12,7 @@ console = Console()
 
 @app.command("ingest")
 def ingest(
-    limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Row limit for pilot runs"),
+    limit: int | None = typer.Option(None, "--limit", "-n", help="Row limit for pilot runs"),
 ) -> None:
     """Phase 1: Load HF dataset → SQLite state DB."""
     from gme.dataset import run_ingest
@@ -72,9 +71,10 @@ def verify() -> None:
 @app.command("status")
 def status() -> None:
     """Show current pipeline progress from state DB."""
+    from rich.table import Table
+
     from gme.config import get_settings
     from gme.state import get_conn, get_counts
-    from rich.table import Table
 
     settings = get_settings()
     if not settings.state_db.exists():

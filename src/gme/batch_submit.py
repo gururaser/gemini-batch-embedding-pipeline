@@ -5,10 +5,8 @@ Token/concurrency caps (Tier 1 @ 90%):
   - MAX_ENQUEUED_TOKENS: 432,000 across all in-flight jobs
   - MAX_CONCURRENT_JOBS: 9
 """
-import asyncio
 import time
 from pathlib import Path
-from typing import Optional
 
 from google import genai
 from rich.console import Console
@@ -28,7 +26,12 @@ from gme.state import (
 console = Console()
 
 # Gemini Batch job states
-TERMINAL_STATES = {"JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED"}
+TERMINAL_STATES = {
+    "JOB_STATE_SUCCEEDED",
+    "JOB_STATE_FAILED",
+    "JOB_STATE_CANCELLED",
+    "JOB_STATE_EXPIRED",
+}
 ACTIVE_STATES = {"JOB_STATE_PENDING", "JOB_STATE_RUNNING"}
 
 # Map Gemini state strings → our DB states
@@ -44,6 +47,7 @@ STATE_MAP = {
 
 @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=32))
 def _upload_file(client: genai.Client, path: Path) -> str:
+    """Upload a JSONL file to Gemini's file service for batch processing."""
     uploaded = client.files.upload(
         file=path,
         config={"mime_type": "application/jsonl"},
@@ -53,6 +57,7 @@ def _upload_file(client: genai.Client, path: Path) -> str:
 
 @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=32))
 def _create_batch(client: genai.Client, file_name: str, display_name: str, model: str) -> str:
+    """Create a new Gemini batch embedding job."""
     job = client.batches.create_embeddings(
         model=model,
         src={"file_name": file_name},
@@ -61,10 +66,11 @@ def _create_batch(client: genai.Client, file_name: str, display_name: str, model
     return job.name
 
 
-def _get_job_state(client: genai.Client, batch_id: str) -> tuple[str, Optional[str]]:
+def _get_job_state(client: genai.Client, batch_id: str) -> tuple[str, str | None]:
+    """Retrieve the current state and result file name of a Gemini batch job."""
     job = client.batches.get(name=batch_id)
     state = str(job.state.name) if hasattr(job.state, "name") else str(job.state)
-    result_file: Optional[str] = None
+    result_file: str | None = None
     if state == "JOB_STATE_SUCCEEDED":
         try:
             result_file = job.dest.file_name if job.dest else None
@@ -74,6 +80,7 @@ def _get_job_state(client: genai.Client, batch_id: str) -> tuple[str, Optional[s
 
 
 def _make_status_table(in_flight: dict, pending_count: int) -> Table:
+    """Create a rich Table showing the status of in-flight and pending jobs."""
     table = Table(title="Batch Submit Status", show_lines=False)
     table.add_column("Batch ID", style="cyan", no_wrap=True, max_width=40)
     table.add_column("Shard", justify="right")
@@ -92,7 +99,11 @@ def _make_status_table(in_flight: dict, pending_count: int) -> Table:
     return table
 
 
-def run_submit(settings: Optional[Settings] = None) -> None:
+def run_submit(settings: Settings | None = None) -> None:
+    """
+    Main loop to submit shards to Gemini, respecting concurrency and token limits,
+    and polling for results.
+    """
     if settings is None:
         settings = get_settings()
 
@@ -127,7 +138,8 @@ def run_submit(settings: Optional[Settings] = None) -> None:
                 if gemini_state in TERMINAL_STATES:
                     with get_conn(settings.state_db) as conn:
                         update_batch_state(conn, batch_id, db_state, result_file)
-                    console.log(f"[{'green' if db_state == 'SUCCEEDED' else 'red'}]Batch {batch_id[-12:]} → {db_state}[/]")
+                    color = "green" if db_state == "SUCCEEDED" else "red"
+                    console.log(f"[{color}]Batch {batch_id[-12:]} → {db_state}[/]")
                     del in_flight[batch_id]
                 else:
                     in_flight[batch_id]["state"] = db_state
@@ -141,7 +153,6 @@ def run_submit(settings: Optional[Settings] = None) -> None:
                 with get_conn(settings.state_db) as conn:
                     pending = get_pending_shards(conn)
 
-                submitted_any = False
                 for row in pending:
                     shard_id = row["shard_id"]
                     est_tokens = row["est_tokens"]
@@ -156,7 +167,10 @@ def run_submit(settings: Optional[Settings] = None) -> None:
                         file_name = _upload_file(client, Path(request_file))
                     except Exception as e:
                         cause = getattr(e, "__cause__", None) or e
-                        console.log(f"[red]Shard {shard_id} upload failed: {type(cause).__name__}: {cause}[/red]")
+                        console.log(
+                            f"[red]Shard {shard_id} upload failed: "
+                            f"{type(cause).__name__}: {cause}[/red]"
+                        )
                         continue
 
                     try:
@@ -168,7 +182,10 @@ def run_submit(settings: Optional[Settings] = None) -> None:
                         )
                     except Exception as e:
                         cause = getattr(e, "__cause__", None) or e
-                        console.log(f"[red]Shard {shard_id} batch create failed: {type(cause).__name__}: {cause}[/red]")
+                        console.log(
+                            f"[red]Shard {shard_id} batch create failed: "
+                            f"{type(cause).__name__}: {cause}[/red]"
+                        )
                         continue
 
                     with get_conn(settings.state_db) as conn:
@@ -180,8 +197,10 @@ def run_submit(settings: Optional[Settings] = None) -> None:
                         "state": "SUBMITTED",
                     }
                     active_tokens += est_tokens
-                    console.log(f"[blue]Submitted shard {shard_id} → batch {batch_id[-12:]} (~{est_tokens:,} tokens)[/blue]")
-                    submitted_any = True
+                    console.log(
+                        f"[blue]Submitted shard {shard_id} → batch {batch_id[-12:]} "
+                        f"(~{est_tokens:,} tokens)[/blue]"
+                    )
 
             # ── Check if done ──────────────────────────────────────────────
             with get_conn(settings.state_db) as conn:

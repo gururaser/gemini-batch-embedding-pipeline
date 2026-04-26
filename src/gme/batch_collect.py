@@ -4,27 +4,31 @@ write to vectors.parquet, update state.
 """
 import json
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from google import genai
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
+from rich import print
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
 
 from gme.config import Settings, get_settings
 from gme.state import get_conn, get_succeeded_batches, mark_embed_failed, mark_embed_ok
 
 
 def _download_result_file(client: genai.Client, file_name: str, dest: Path) -> None:
+    """Download a batch result file from Gemini's file service."""
     if dest.exists():
         return
     content = client.files.download(file=file_name)
     dest.write_bytes(bytes(content))
 
 
-def _parse_result_line(line: str) -> tuple[Optional[str], Optional[list[float]], Optional[str]]:
-    """Returns (article_id, vector, error_msg). error_msg is set on failure."""
+def _parse_result_line(line: str) -> tuple[str | None, list[float] | None, str | None]:
+    """
+    Parse a single line from a Gemini batch result JSONL file.
+    Returns (article_id, vector, error_msg).
+    """
     try:
         obj = json.loads(line)
     except json.JSONDecodeError as e:
@@ -50,6 +54,7 @@ def _parse_result_line(line: str) -> tuple[Optional[str], Optional[list[float]],
 
 
 def _append_to_parquet(rows: list[dict], path: Path, dim: int) -> None:
+    """Append a list of vector records to a Parquet file, creating it if it doesn't exist."""
     schema = pa.schema([
         pa.field("article_id", pa.string()),
         pa.field("point_uuid", pa.string()),
@@ -74,7 +79,11 @@ def _append_to_parquet(rows: list[dict], path: Path, dim: int) -> None:
         pq.write_table(table, path)
 
 
-def run_collect(settings: Optional[Settings] = None) -> None:
+def run_collect(settings: Settings | None = None) -> None:
+    """
+    Orchestrate the collection of all succeeded batch results, parsing them,
+    saving them to Parquet, and updating the state database.
+    """
     if settings is None:
         settings = get_settings()
 
@@ -91,7 +100,6 @@ def run_collect(settings: Optional[Settings] = None) -> None:
     print(f"Collecting {len(succeeded)} completed batch(es)…")
 
     total_ok = total_failed = 0
-    token_counts: list[int] = []
 
     with Progress(
         SpinnerColumn(),
@@ -151,7 +159,10 @@ def run_collect(settings: Optional[Settings] = None) -> None:
                     # Validate normalization (auto-normalized by Matryoshka)
                     norm = float(np.linalg.norm(vector))
                     if not (0.95 <= norm <= 1.05):
-                        print(f"[yellow]Warning: vector for {article_id} has norm={norm:.4f}[/yellow]")
+                        print(
+                            f"[yellow]Warning: vector for {article_id} "
+                            f"has norm={norm:.4f}[/yellow]"
+                        )
 
                     point_uuid = uuid_map.get(article_id, "")
                     batch_rows.append({

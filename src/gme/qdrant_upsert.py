@@ -1,11 +1,9 @@
 import json
-import uuid
-from typing import Optional
 
 import pyarrow.parquet as pq
-from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
+from rich import print
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
 
 from gme.config import Settings, get_settings
 from gme.qdrant_setup import get_qdrant_client
@@ -14,7 +12,11 @@ from gme.state import get_conn, get_upsert_pending, mark_upsert_ok
 UPSERT_BATCH_SIZE = 256
 
 
-def run_qdrant_upsert(settings: Optional[Settings] = None) -> None:
+def run_qdrant_upsert(settings: Settings | None = None) -> None:
+    """
+    Read embedded vectors from Parquet and metadata from the state database,
+    then upsert points to the Qdrant collection.
+    """
     if settings is None:
         settings = get_settings()
 

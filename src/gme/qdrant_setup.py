@@ -1,4 +1,3 @@
-from typing import Optional
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -10,6 +9,7 @@ from qdrant_client.models import (
     PayloadSchemaType,
     VectorParams,
 )
+from rich import print
 
 from gme.config import Settings, get_settings
 
@@ -27,13 +27,18 @@ KEYWORD_INDEX_FIELDS = [
 
 
 def get_qdrant_client(settings: Settings) -> QdrantClient:
+    """Initialize and return a QdrantClient based on provided settings."""
     kwargs: dict = {"url": settings.qdrant_url}
     if settings.qdrant_api_key:
         kwargs["api_key"] = settings.qdrant_api_key
     return QdrantClient(**kwargs)
 
 
-def run_qdrant_init(settings: Optional[Settings] = None) -> None:
+def run_qdrant_init(settings: Settings | None = None) -> None:
+    """
+    Initialize the Qdrant collection with appropriate vector and payload configurations.
+    Enables binary quantization and on-disk storage for efficiency.
+    """
     if settings is None:
         settings = get_settings()
 

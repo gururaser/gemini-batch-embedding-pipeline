@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Configuration settings for the Gemini Multimodal Embeddings project."""
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -28,7 +29,8 @@ class Settings(BaseSettings):
     records_per_shard: int = Field(100, alias="RECORDS_PER_SHARD")
     max_concurrent_jobs: int = Field(9, alias="MAX_CONCURRENT_JOBS")
     max_enqueued_tokens: int = Field(432_000, alias="MAX_ENQUEUED_TOKENS")
-    tokens_per_record_estimate: int = 330  # 259 image (512px JPEG) + ~70 text (typical text_to_embed ~50-70 tokens)
+    # 259 image (512px JPEG) + ~70 text (typical text_to_embed ~50-70 tokens)
+    tokens_per_record_estimate: int = 330
 
     # Image download
     image_download_concurrency: int = Field(32, alias="IMAGE_DOWNLOAD_CONCURRENCY")
@@ -42,34 +44,41 @@ class Settings(BaseSettings):
     @computed_field  # type: ignore[misc]
     @property
     def raw_dir(self) -> Path:
+        """Directory for raw dataset files."""
         return self.data_dir / "raw"
 
     @computed_field  # type: ignore[misc]
     @property
     def images_dir(self) -> Path:
+        """Directory for downloaded and processed images."""
         return self.data_dir / "images"
 
     @computed_field  # type: ignore[misc]
     @property
     def batches_in_dir(self) -> Path:
+        """Directory for batch request files."""
         return self.data_dir / "batches" / "in"
 
     @computed_field  # type: ignore[misc]
     @property
     def batches_out_dir(self) -> Path:
+        """Directory for batch result files."""
         return self.data_dir / "batches" / "out"
 
     @computed_field  # type: ignore[misc]
     @property
     def vectors_parquet(self) -> Path:
+        """Path to the Parquet file containing processed vectors."""
         return self.data_dir / "vectors.parquet"
 
     @computed_field  # type: ignore[misc]
     @property
     def state_db(self) -> Path:
+        """Path to the SQLite state database."""
         return self.data_dir / "state.db"
 
     def ensure_dirs(self) -> None:
+        """Ensure all required data directories exist."""
         for d in (
             self.raw_dir,
             self.images_dir,
@@ -84,6 +93,7 @@ _settings: Settings | None = None
 
 
 def get_settings() -> Settings:
+    """Get the global Settings instance, initializing it if necessary."""
     global _settings
     if _settings is None:
         _settings = Settings()

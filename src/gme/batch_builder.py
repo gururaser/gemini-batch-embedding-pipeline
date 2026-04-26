@@ -1,8 +1,8 @@
 import base64
 import json
 from pathlib import Path
-from typing import Optional
 
+from rich import print
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from gme.config import Settings, get_settings
@@ -20,6 +20,7 @@ def _build_request(
     image_path: Path,
     embedding_dim: int,
 ) -> dict:
+    """Construct a Gemini batch request dictionary for a single product."""
     image_bytes = image_path.read_bytes()
     b64 = base64.b64encode(image_bytes).decode("ascii")
     return {
@@ -37,11 +38,16 @@ def _build_request(
 
 
 def _get_text_to_embed(payload_json: str) -> str:
+    """Extract the text to be embedded from a JSON payload string."""
     payload = json.loads(payload_json)
     return payload.get("text_to_embed", "")
 
 
-def run_build_shards(settings: Optional[Settings] = None) -> None:
+def run_build_shards(settings: Settings | None = None) -> None:
+    """
+    Groups embeddable records into JSONL shards ready for Gemini batch submission.
+    Each shard is tracked in the state database.
+    """
     if settings is None:
         settings = get_settings()
 
@@ -105,6 +111,7 @@ def _flush_shard(
     shard_id: int,
     settings: Settings,
 ) -> None:
+    """Write a shard to a JSONL file and record it in the state database."""
     shard_path = settings.batches_in_dir / f"shard_{shard_id:05d}.jsonl"
     with open(shard_path, "w") as f:
         for line in shard:
@@ -118,6 +125,7 @@ def _flush_shard(
 
 
 def _get_next_shard_id(settings: Settings) -> int:
+    """Determine the next available shard ID from the database."""
     with get_conn(settings.state_db) as conn:
         row = conn.execute("SELECT MAX(shard_id) FROM batches").fetchone()
         if row[0] is None:

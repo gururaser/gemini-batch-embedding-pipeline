@@ -1,11 +1,8 @@
 import random
-from typing import Optional
 
-import numpy as np
 import pyarrow.parquet as pq
 from google import genai
 from google.genai import types as genai_types
-from qdrant_client import QdrantClient
 from rich.console import Console
 from rich.table import Table
 
@@ -16,7 +13,11 @@ from gme.state import get_conn, get_counts
 console = Console()
 
 
-def run_verify(settings: Optional[Settings] = None) -> None:
+def run_verify(settings: Settings | None = None) -> None:
+    """
+    Perform multiple verification checks to ensure data integrity and search
+    relevance across DB, Parquet, and Qdrant.
+    """
     if settings is None:
         settings = get_settings()
 
@@ -125,7 +126,11 @@ def run_verify(settings: Optional[Settings] = None) -> None:
                 limit=5,
                 with_payload=True,
             ).points
-            types_in_top5 = [r.payload.get("product_type_name", "") for r in search_results if r.payload]
+            types_in_top5 = [
+                r.payload.get("product_type_name", "")
+                for r in search_results
+                if r.payload
+            ]
             if expected_type in types_in_top5:
                 cross_modal_ok += 1
         except Exception as e:
@@ -142,6 +147,7 @@ def run_verify(settings: Optional[Settings] = None) -> None:
 
 
 def _print_summary(counts: dict, checks: dict) -> None:
+    """Print summary statistics and check results in a formatted table."""
     # Pipeline summary
     summary = Table(title="Pipeline Summary", show_lines=True)
     summary.add_column("Metric", style="bold")
