@@ -73,12 +73,12 @@ def run_verify(settings: Optional[Settings] = None) -> None:
 
         for idx in sample_20_idx:
             vec = [float(v) for v in vecs[idx]]
-            results_q = client.search(
+            results_q = client.query_points(
                 collection_name=collection,
-                query_vector=vec,
+                query=vec,
                 limit=1,
                 with_payload=False,
-            )
+            ).points
             if results_q and str(results_q[0].id) == puuids[idx] and results_q[0].score > 0.99:
                 self_search_ok += 1
 
@@ -119,12 +119,12 @@ def run_verify(settings: Optional[Settings] = None) -> None:
                 ),
             )
             query_vec = emb_result.embeddings[0].values
-            search_results = client.search(
+            search_results = client.query_points(
                 collection_name=collection,
-                query_vector=query_vec,
+                query=list(query_vec),
                 limit=5,
                 with_payload=True,
-            )
+            ).points
             types_in_top5 = [r.payload.get("product_type_name", "") for r in search_results if r.payload]
             if expected_type in types_in_top5:
                 cross_modal_ok += 1

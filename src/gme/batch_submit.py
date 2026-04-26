@@ -154,6 +154,12 @@ def run_submit(settings: Optional[Settings] = None) -> None:
 
                     try:
                         file_name = _upload_file(client, Path(request_file))
+                    except Exception as e:
+                        cause = getattr(e, "__cause__", None) or e
+                        console.log(f"[red]Shard {shard_id} upload failed: {type(cause).__name__}: {cause}[/red]")
+                        continue
+
+                    try:
                         batch_id = _create_batch(
                             client,
                             file_name,
@@ -161,7 +167,8 @@ def run_submit(settings: Optional[Settings] = None) -> None:
                             settings.gemini_model,
                         )
                     except Exception as e:
-                        console.log(f"[red]Failed to submit shard {shard_id}: {e}[/red]")
+                        cause = getattr(e, "__cause__", None) or e
+                        console.log(f"[red]Shard {shard_id} batch create failed: {type(cause).__name__}: {cause}[/red]")
                         continue
 
                     with get_conn(settings.state_db) as conn:

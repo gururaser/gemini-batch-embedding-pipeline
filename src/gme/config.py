@@ -25,10 +25,10 @@ class Settings(BaseSettings):
     data_dir: Path = Field(Path("data"), alias="DATA_DIR")
 
     # Batch tuning (Tier 1 @ 90%)
-    records_per_shard: int = Field(40, alias="RECORDS_PER_SHARD")
+    records_per_shard: int = Field(100, alias="RECORDS_PER_SHARD")
     max_concurrent_jobs: int = Field(9, alias="MAX_CONCURRENT_JOBS")
     max_enqueued_tokens: int = Field(432_000, alias="MAX_ENQUEUED_TOKENS")
-    tokens_per_record_estimate: int = 1200  # conservative: ~150 text + ~1024 image
+    tokens_per_record_estimate: int = 330  # 259 image (512px JPEG) + ~70 text (typical text_to_embed ~50-70 tokens)
 
     # Image download
     image_download_concurrency: int = Field(32, alias="IMAGE_DOWNLOAD_CONCURRENCY")

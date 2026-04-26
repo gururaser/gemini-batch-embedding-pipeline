@@ -19,8 +19,8 @@ from gme.state import get_conn, get_succeeded_batches, mark_embed_failed, mark_e
 def _download_result_file(client: genai.Client, file_name: str, dest: Path) -> None:
     if dest.exists():
         return
-    content = client.files.download(name=file_name)
-    dest.write_bytes(content)
+    content = client.files.download(file=file_name)
+    dest.write_bytes(bytes(content))
 
 
 def _parse_result_line(line: str) -> tuple[Optional[str], Optional[list[float]], Optional[str]]:
@@ -38,16 +38,14 @@ def _parse_result_line(line: str) -> tuple[Optional[str], Optional[list[float]],
         return key, None, str(obj["error"])
 
     try:
-        # Result structure: response.embeddings[0].values
+        # Result structure: response.embedding.values
         response = obj.get("response", {})
-        embeddings = response.get("embeddings", [])
-        if not embeddings:
-            return key, None, "empty embeddings"
-        values = embeddings[0].get("values", [])
+        embedding = response.get("embedding", {})
+        values = embedding.get("values", [])
         if not values:
             return key, None, "empty values"
         return key, values, None
-    except (KeyError, IndexError, TypeError) as e:
+    except (KeyError, TypeError) as e:
         return key, None, f"parse error: {e}"
 
 

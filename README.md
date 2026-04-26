@@ -118,7 +118,7 @@ All tunable via `.env`:
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant endpoint |
 | `QDRANT_COLLECTION` | `hm_products` | Collection name |
 | `EMBEDDING_DIM` | `1536` | Matryoshka output dim (128–3072) |
-| `RECORDS_PER_SHARD` | `40` | Records per batch job (retune after pilot) |
+| `RECORDS_PER_SHARD` | `100` | Records per batch job (~330 tokens/record: 259 image + ~70 text) |
 | `MAX_CONCURRENT_JOBS` | `9` | Concurrent Gemini batch jobs |
 | `MAX_ENQUEUED_TOKENS` | `432000` | Token cap across in-flight jobs (90% of 500K) |
 | `IMAGE_DOWNLOAD_CONCURRENCY` | `32` | Parallel image downloads |

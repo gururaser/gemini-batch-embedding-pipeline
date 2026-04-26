@@ -72,7 +72,7 @@ def now() -> int:
 
 def insert_records(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> int:
     ts = now()
-    conn.executemany(
+    cursor = conn.executemany(
         """
         INSERT OR IGNORE INTO records
             (article_id, point_uuid, image_url, payload_json, updated_at)
@@ -81,7 +81,7 @@ def insert_records(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> int:
         """,
         [{**r, "updated_at": ts} for r in rows],
     )
-    return conn.rowcount
+    return cursor.rowcount
 
 
 def set_image_status(

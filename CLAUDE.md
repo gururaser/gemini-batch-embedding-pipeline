@@ -61,7 +61,7 @@ ingest → download-images → build-shards → submit → collect → qdrant-in
 ## Configuration
 
 All tuning in `.env` (see `.env.example`). Key knobs:
-- `RECORDS_PER_SHARD` (default 40) — calibrate after pilot by checking `usageMetadata.totalTokenCount` in result files; if real image token cost is ~258 (not ~1024), shard size can increase ~4×
+- `RECORDS_PER_SHARD` (default 100) — calibrated: 512px JPEG costs 259 image tokens + ~70 text (text_to_embed is ~50–70 tokens) ≈ 330 tokens/record. At 9 concurrent: 100 × 330 × 9 = 297K enqueued < 432K cap
 - `EMBEDDING_DIM` — Matryoshka-truncated; 1536 is the default (auto-normalized by Gemini)
 
 ## Gemini SDK Usage

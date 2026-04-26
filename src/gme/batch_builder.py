@@ -25,15 +25,13 @@ def _build_request(
     return {
         "key": article_id,
         "request": {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": text},
-                        {"inline_data": {"mime_type": "image/jpeg", "data": b64}},
-                    ]
-                }
-            ],
-            "config": {"output_dimensionality": embedding_dim},
+            "output_dimensionality": embedding_dim,
+            "content": {
+                "parts": [
+                    {"text": text},
+                    {"inline_data": {"mime_type": "image/jpeg", "data": b64}},
+                ]
+            },
         },
     }
 

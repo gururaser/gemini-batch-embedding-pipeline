@@ -37,7 +37,7 @@ def run_ingest(limit: Optional[int] = None, settings: Optional[Settings] = None)
     if limit is not None:
         ds = ds.select(range(min(limit, len(ds))))
 
-    exclude_set = set(settings.exclude_columns) | {"text_to_embed", "image_url"}
+    exclude_set = set(settings.exclude_columns)
     total = len(ds)
 
     with Progress(
