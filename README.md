@@ -1,4 +1,4 @@
-# gemini-multimodal-embeddings
+# gemini-batch-embed
 
 ETL pipeline that generates multimodal (text + image) embeddings for H&M fashion products using the **Gemini Embedding 2** model via the **Gemini Batch API**, then stores them in **Qdrant** for vector search.
 
@@ -17,6 +17,102 @@ The pipeline is built around the Gemini Batch API (50% cost discount vs. synchro
 |---|---|---|
 | Batch enqueued tokens (Embedding) | 500,000 | ≤ 450,000 |
 | Concurrent batch jobs | 100 | ≤ 9 (with 40 records/shard ≈ 48K tokens/shard) |
+
+### Architecture
+
+```mermaid
+flowchart TD
+    %% ── External services ──────────────────────────────────────────
+    HF{{HuggingFace\nQdrant/hm_ecommerce_products\n~105K products}}
+    GEMINI{{Gemini Batch API\ngemini-embedding-2\n1536-dim Matryoshka}}
+    QDRANT_SVC{{Qdrant\nlocalhost:6333\nhm_products}}
+
+    %% ── State store ────────────────────────────────────────────────
+    DB[(SQLite state.db\nrecords · batches\nWAL mode)]
+
+    %% ── Data artifacts ─────────────────────────────────────────────
+    IMAGES[/data/images/\nsha256.jpg\ncached JPEGs ≤512px/]
+    SHARDS[/data/batches/in/\nshard_*.jsonl\ntext + base64 image/]
+    RESULTS[/data/batches/out/\nbatch_id.jsonl\nembedding results/]
+    PARQUET[/data/vectors.parquet\narticle_id · point_uuid\nvector 1536-dim/]
+
+    %% ════════════════════════════════════════════════════════════════
+    subgraph INGEST["Ingestion — Phases 1 & 2"]
+        direction TB
+        P1["Phase 1 · dataset.py\ngme ingest\nLoad HF parquet → SQLite"]
+        P2["Phase 2 · images.py\ngme download-images\nasync HTTP/2 · semaphore=32 · 5× retry"]
+    end
+
+    subgraph EMBED["Batch Embedding — Phases 3 · 4 · 5"]
+        direction TB
+        P3["Phase 3 · batch_builder.py\ngme build-shards\nPartition embeddable records into JSONL shards"]
+        P4["Phase 4 · batch_submit.py\ngme submit\nUpload · poll · token budget\n≤9 concurrent · ≤432K tokens"]
+        P5["Phase 5 · batch_collect.py\ngme collect\nDownload results → vectors.parquet"]
+    end
+
+    subgraph STORE["Vector Storage — Phases 6 & 7"]
+        direction TB
+        P6["Phase 6 · qdrant_setup.py\ngme qdrant-init\nCreate collection · HNSW · binary quant\nPayload keyword indexes"]
+        P7["Phase 7 · qdrant_upsert.py\ngme qdrant-upsert\nBatch upsert · parallel=4\nDeterministic UUID5 IDs"]
+    end
+
+    subgraph VERIFY["Verification — Phase 8"]
+        direction TB
+        P8["Phase 8 · verify.py\ngme verify\nCount match · spot-check · self-search · cross-modal"]
+    end
+
+    %% ── Phase sequencing ───────────────────────────────────────────
+    HF -->|"parquet stream"| P1
+    P1 -->|"105K records\nembed_status=pending"| P2
+    P2 -->|"image_status=ok"| P3
+    P3 --> P4
+    P4 -->|"SUCCEEDED batches"| P5
+    P5 --> P6
+    P6 --> P7
+    P7 --> P8
+
+    %% ── State DB interactions ───────────────────────────────────────
+    P1 -->|"INSERT records"| DB
+    P2 -->|"SET image_status\nok / failed_404 / failed_other"| DB
+    DB -->|"image_status=ok\nembed_status=pending"| P3
+    P3 -->|"INSERT batches PENDING\nSET embed_status=in_batch"| DB
+    DB -->|"PENDING shards\ntoken budget check"| P4
+    P4 -->|"SET batches SUBMITTED\n→ RUNNING → SUCCEEDED\nFAILED resets to pending"| DB
+    DB -->|"SUCCEEDED batches\nresult_file paths"| P5
+    P5 -->|"SET embed_status=ok\nper record"| DB
+    DB -->|"embed_status=ok\nupsert_status=pending"| P7
+    P7 -->|"SET upsert_status=ok"| DB
+    DB -->|"counts · upserted IDs"| P8
+
+    %% ── Artifact flows ─────────────────────────────────────────────
+    P2 -->|"write JPEG"| IMAGES
+    IMAGES -->|"base64 encode"| P3
+    P3 -->|"write"| SHARDS
+    SHARDS -->|"upload file"| GEMINI
+    GEMINI -->|"result file"| RESULTS
+    RESULTS -->|"parse embeddings"| P5
+    P5 -->|"write"| PARQUET
+    PARQUET -->|"read vectors"| P7
+    PARQUET -->|"self-search sample"| P8
+
+    %% ── External service interactions ──────────────────────────────
+    P4 <-->|"create / poll jobs"| GEMINI
+    P6 -->|"create collection\nset HNSW + binary quant\ncreate payload indexes"| QDRANT_SVC
+    P7 -->|"batch upsert\nvectors + payloads"| QDRANT_SVC
+    P8 -->|"count · retrieve · query_points"| QDRANT_SVC
+    P8 -->|"embed_content\ncross-modal queries"| GEMINI
+
+    %% ── Styling ─────────────────────────────────────────────────────
+    classDef phase     fill:#1e40af,stroke:#93c5fd,color:#fff
+    classDef external  fill:#92400e,stroke:#fcd34d,color:#fff
+    classDef artifact  fill:#14532d,stroke:#86efac,color:#fff
+    classDef statedb   fill:#4c1d95,stroke:#c4b5fd,color:#fff
+
+    class P1,P2,P3,P4,P5,P6,P7,P8 phase
+    class HF,GEMINI,QDRANT_SVC external
+    class IMAGES,SHARDS,RESULTS,PARQUET artifact
+    class DB statedb
+```
 
 ## Dataset
 
