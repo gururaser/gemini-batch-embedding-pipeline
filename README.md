@@ -352,6 +352,7 @@ src/gme/
   qdrant_setup.py    # phase 6: collection + index creation
   qdrant_upsert.py   # phase 7: vector upsert
   verify.py          # phase 8: end-to-end verification
+  cleanup.py         # intermediate file cleanup (shards + results)
   cli.py             # Typer CLI entry point
 data/
   state.db           # SQLite pipeline state
