@@ -22,6 +22,31 @@ The pipeline is built around the Gemini Batch API (50% cost discount vs. synchro
 | Batch enqueued tokens (Embedding) | 500,000 | ≤ 432,000 |
 | Concurrent batch jobs | 100 | ≤ 9 (with 100 records/shard ≈ 33K tokens/shard) |
 
+## Cost Estimation
+
+> **Note:** Gemini Embedding 2 has no published batch pricing. Batch pricing is generally 50% of the standard rate, so the figures below are approximate estimates based on that assumption. See the [official pricing page](https://ai.google.dev/gemini-api/docs/pricing#gemini-embedding-2) for current standard rates.
+
+**Standard unit cost per record** (1 image + ~50 text tokens):
+
+| Input | Calculation | Cost |
+|---|---|---|
+| Text (~50 tokens) | 50 × ($0.20 / 1,000,000) | $0.00001 |
+| Image (1 piece) | — | $0.00012 |
+| **Total (standard)** | | **$0.00013** |
+
+**Batch unit cost** (estimated ~50% discount): **$0.000065 per record**
+
+**Total cost at scale (batch)**:
+
+| Records | Estimated Cost (USD) |
+|---|---|
+| 1,000 | $0.065 |
+| 10,000 | $0.65 |
+| 100,000 | $6.50 |
+| 1,000,000 | $65.00 |
+
+For the full ~105K dataset in this project, the estimated batch cost is **~$6.80**.
+
 ### Architecture
 
 ```mermaid
