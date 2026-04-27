@@ -12,6 +12,8 @@ docker compose up -d            # start local Qdrant on :6333
 # Run a phase
 uv run gme <phase>              # see phases below
 uv run gme status               # check progress from state.db
+uv run gme cleanup --dry-run    # preview reclaimable space (shards + results)
+uv run gme cleanup              # delete fully-processed intermediates
 
 # Test
 uv run pytest tests/ -v         # all tests
