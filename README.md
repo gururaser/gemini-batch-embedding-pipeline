@@ -245,6 +245,10 @@ All tunable via `.env`:
 - **Payload**: all dataset metadata columns except precomputed embeddings
 - **Payload indexes (KEYWORD)**: `product_type_name`, `product_group_name`, `colour_group_name`, `perceived_colour_master_name`, `index_group_name`, `garment_group_name`, `department_name`, `section_name`, `article_id`
 
+### Point Example from Qdrant Collection
+<img width="1725" height="1100" alt="image" src="https://github.com/user-attachments/assets/222177a4-ec8d-44b6-bb30-e2844a4b498f" />
+
+
 ## Project Structure
 
 ```
