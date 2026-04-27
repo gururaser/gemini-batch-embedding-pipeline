@@ -15,55 +15,67 @@ uv run gme status               # check progress from state.db
 uv run gme cleanup --dry-run    # preview reclaimable space (shards + results)
 uv run gme cleanup              # delete fully-processed intermediates
 
-# Test
-uv run pytest tests/ -v         # all tests
-uv run pytest tests/test_state.py -v  # single file
-uv run pytest -k test_insert    # single test by name
-
 # Lint
-uv run ruff check src/ tests/
-uv run ruff format src/ tests/
+uv run ruff check src/
+uv run ruff format src/
 
 # Shortcuts
-make pilot   # ingest --limit 500, then all phases end-to-end
-make full    # same without --limit
+make pilot    # ingest --limit 500, then all phases end-to-end
+make full     # same without --limit
 make verify
+make cleanup  # delete eligible intermediates (shards + results)
 ```
 
 ## Pipeline Architecture
 
-The pipeline is split into 8 sequential, idempotent phases, each a standalone `gme <cmd>`. All state is persisted in `data/state.db` (SQLite WAL), so any phase can be interrupted and re-run safely.
+8 sequential, idempotent phases — each a standalone `gme <cmd>`. All state is persisted in `data/state.db` (SQLite WAL) so any phase can be interrupted and re-run safely.
 
 ```
 ingest → download-images → build-shards → submit → collect → qdrant-init → qdrant-upsert → verify
 ```
 
-**State machine per record** (column `embed_status`):
-`pending` → `in_batch` (build-shards assigns) → `ok` / `failed` (collect sets)
+**Two independent state columns per record:**
+- `embed_status`: `pending` → `in_batch` (build-shards) → `ok` / `failed` (collect)
+- `upsert_status`: `pending` → `ok` (qdrant-upsert)
+
+Failed/expired batches reset their records to `embed_status='pending'` and `shard_id=NULL` so they are re-sharded on the next `build-shards` run.
 
 **Token budget enforcement** (Tier 1 @ 90%):
 - `MAX_ENQUEUED_TOKENS=432_000` — sum of `est_tokens` across all in-flight Gemini batch jobs
 - `MAX_CONCURRENT_JOBS=9` — concurrent batch job cap
 - Both enforced in `batch_submit.py`'s submit loop before calling `client.batches.create_embeddings()`
 
+## Data Directory Layout
+
+```
+data/
+├── state.db              — SQLite state machine (never delete)
+├── vectors.parquet       — collected 1536-dim embeddings (never delete)
+├── images/               — SHA256-named JPEGs ≤512px (keep; prevents re-download)
+├── batches/in/           — shard_XXXXX.jsonl (text + base64 image, ~870 KB each)
+└── batches/out/          — <batch_id>.jsonl result files from Gemini
+```
+
+`gme cleanup` deletes `batches/in/` and `batches/out/` files once state.db confirms all their records are fully embedded and upserted.
+
 ## Key Design Decisions
 
-**SQLite as state store** (`state.py`): `records` table tracks per-row progress through all phases. `batches` table tracks Gemini batch job lifecycle. Always use `get_conn()` context manager — it sets WAL mode, `busy_timeout=5000`, and auto-commits/rolls back.
+**SQLite as state store** (`state.py`): `records` table tracks per-row progress; `batches` table tracks Gemini batch job lifecycle. Always use `get_conn()` — it sets WAL mode, `busy_timeout=5000`, and auto-commits/rolls back.
 
-**Deterministic point IDs**: `uuid5(NAMESPACE_URL, article_id)` in `dataset.py`. This makes Qdrant upserts idempotent — re-running `qdrant-upsert` is always safe.
+**Deterministic point IDs**: `uuid5(NAMESPACE_URL, article_id)` in `dataset.py`. Makes Qdrant upserts idempotent — re-running `qdrant-upsert` is always safe.
 
-**Batch result parsing** (`batch_collect.py`): Each result JSONL line has shape `{"key": "<article_id>", "response": {"embeddings": [{"values": [...]}]}}` on success, or `{"key": "...", "error": {...}}` on per-record failure. Succeeded batches can contain per-record errors — check both.
+**Batch result parsing** (`batch_collect.py`): Each result JSONL line is `{"key": "<article_id>", "response": {"embeddings": [{"values": [...]}]}}` on success, or `{"key": "...", "error": {...}}` on per-record failure. Succeeded batches can still contain per-record errors — check both levels.
 
-**Image pipeline** (`images.py`): Images are downloaded async (httpx, HTTP/2, semaphore=32), normalized to JPEG at ≤512px longest side via PIL, and stored at `data/images/<sha256>.jpg`. The SHA256 filename makes the cache idempotent.
+**Image pipeline** (`images.py`): Downloaded async (httpx, HTTP/2, semaphore=32), normalized to JPEG at ≤512px longest side via PIL, stored at `data/images/<sha256>.jpg`. SHA256 filename makes the cache idempotent.
 
-**Shard JSONL format** (`batch_builder.py`): Each line is `{"key": "<article_id>", "request": {"contents": [...text + inline_data base64...], "config": {"output_dimensionality": 1536}}}`. Images are embedded inline as base64 JPEG — shards can be large files.
+**Shard JSONL format** (`batch_builder.py`): Each line is `{"key": "<article_id>", "request": {"contents": [...text + inline_data base64...], "config": {"output_dimensionality": 1536}}}`. Images are embedded inline as base64 — shards can be large.
 
 **Qdrant collection**: 1536-dim COSINE, on-disk vectors + HNSW, binary quantization (`always_ram=True` keeps quantized index hot), on-disk payload. `qdrant_setup.py` creates KEYWORD payload indexes on 9 low-cardinality fields.
 
 ## Configuration
 
 All tuning in `.env` (see `.env.example`). Key knobs:
-- `RECORDS_PER_SHARD` (default 100) — calibrated: 512px JPEG costs 259 image tokens + ~70 text (text_to_embed is ~50–70 tokens) ≈ 330 tokens/record. At 9 concurrent: 100 × 330 × 9 = 297K enqueued < 432K cap
+- `RECORDS_PER_SHARD` (default 100) — calibrated: 512px JPEG ≈ 259 image tokens + ~70 text ≈ 330 tokens/record. At 9 concurrent jobs: 100 × 330 × 9 = 297K enqueued < 432K cap
 - `EMBEDDING_DIM` — Matryoshka-truncated; 1536 is the default (auto-normalized by Gemini)
 
 ## Gemini SDK Usage
