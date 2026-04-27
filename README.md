@@ -22,6 +22,31 @@ The pipeline is built around the Gemini Batch API (50% cost discount vs. synchro
 | Batch enqueued tokens (Embedding) | 500,000 | ≤ 432,000 |
 | Concurrent batch jobs | 100 | ≤ 9 (with 100 records/shard ≈ 33K tokens/shard) |
 
+## Cost Estimation
+
+> **Note:** Gemini Embedding 2 has no published batch pricing. Batch pricing is generally 50% of the standard rate, so the figures below are approximate estimates based on that assumption. See the [official pricing page](https://ai.google.dev/gemini-api/docs/pricing#gemini-embedding-2) for current standard rates.
+
+**Standard unit cost per record** (1 image + ~50 text tokens):
+
+| Input | Calculation | Cost |
+|---|---|---|
+| Text (~50 tokens) | 50 × ($0.20 / 1,000,000) | $0.00001 |
+| Image (1 piece) | — | $0.00012 |
+| **Total (standard)** | | **$0.00013** |
+
+**Batch unit cost** (estimated ~50% discount): **$0.000065 per record**
+
+**Total cost at scale (batch)**:
+
+| Records | Estimated Cost (USD) |
+|---|---|
+| 1,000 | $0.065 |
+| 10,000 | $0.65 |
+| 100,000 | $6.50 |
+| 1,000,000 | $65.00 |
+
+For the full ~105K dataset in this project, the estimated batch cost is **$6.80**.
+
 ### Architecture
 
 ```mermaid
@@ -195,6 +220,70 @@ uv run gme verify
 uv run gme status
 ```
 
+## Example Execution
+
+Below is a typical end-to-end run for a subset of the dataset:
+
+```bash
+$ uv run gme ingest --limit 2000
+Loading dataset 'Qdrant/hm_ecommerce_products' (train split)…
+Ingest complete. 2000 rows processed, 2000 new records inserted.
+
+$ uv run gme download-images
+Downloading 2000 images (concurrency=32)…
+Image download complete. ok=1982, failed_404=0, failed_other=18
+
+$ uv run gme build-shards
+Building shards for 1982 records (shard_size=40)…
+Built 50 shards in data/batches/in
+
+$ uv run gme submit
+[14:12:58] Submitted shard 0 → batch 79dxxx... (~13,200 tokens)
+[14:13:02] Submitted shard 1 → batch 1l4rxx... (~13,200 tokens)
+...
+[14:18:15] Batch 79dxxx... → SUCCEEDED
+[14:18:16] Batch 1l4rxx... → SUCCEEDED
+...
+All shards submitted and completed.
+
+$ uv run gme collect
+Collecting 50 completed batch(es)…
+Collect complete. Vectors written: 1982, failures: 0
+vectors.parquet total rows: 1982
+
+$ uv run gme qdrant-init
+Collection 'hm_products' created (dim=1536, COSINE, on-disk, binary quantization).
+
+$ uv run gme qdrant-upsert
+Loading vectors from parquet…
+Loaded 1982 vectors.
+Upserting 1982 points to 'hm_products'…
+Upsert complete.
+
+$ uv run gme verify
+                     Verification Checks                      
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Check                    ┃ Result                          ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ Count match              │ PASS (DB=1982, Qdrant=1982)     │
+├──────────────────────────┼─────────────────────────────────┤
+│ Spot-check 100           │ PASS (100/100 found)            │
+├──────────────────────────┼─────────────────────────────────┤
+│ Self-search (top-1=self) │ PASS (20/20)                    │
+├──────────────────────────┼─────────────────────────────────┤
+│ Cross-modal sanity       │ PASS (5/5 matched product_type) │
+└──────────────────────────┴─────────────────────────────────┘
+
+$ uv run gme cleanup
+Shards (data/batches/in):
+  50 of 50 shards fully embedded — eligible for deletion (57.3 MB)
+Results (data/batches/out):
+  50 of 50 result files fully upserted — eligible for deletion (37.2 MB)
+
+Total reclaimable: 94.5 MB
+Deleted 100 files, reclaimed 94.5 MB.
+```
+
 ### Clean up intermediates
 
 After a successful run, shard files (`data/batches/in/`) and result files (`data/batches/out/`) are no longer needed. Preview what's safe to delete, then reclaim the space:
@@ -244,6 +333,10 @@ All tunable via `.env`:
 - **Quantization**: Binary quantization (`always_ram=True`) — reduces index memory ~32× vs. float32
 - **Payload**: all dataset metadata columns except precomputed embeddings
 - **Payload indexes (KEYWORD)**: `product_type_name`, `product_group_name`, `colour_group_name`, `perceived_colour_master_name`, `index_group_name`, `garment_group_name`, `department_name`, `section_name`, `article_id`
+
+### Point Example from Qdrant Collection
+<img width="1725" height="1100" alt="image" src="https://github.com/user-attachments/assets/222177a4-ec8d-44b6-bb30-e2844a4b498f" />
+
 
 ## Project Structure
 
