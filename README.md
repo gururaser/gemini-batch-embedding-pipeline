@@ -195,6 +195,19 @@ uv run gme verify
 uv run gme status
 ```
 
+### Clean up intermediates
+
+After a successful run, shard files (`data/batches/in/`) and result files (`data/batches/out/`) are no longer needed. Preview what's safe to delete, then reclaim the space:
+
+```bash
+uv run gme cleanup --dry-run   # preview: shows file counts and sizes
+uv run gme cleanup             # delete eligible files
+# or:
+make cleanup
+```
+
+The command queries `state.db` to determine eligibility — only files whose records are fully embedded and upserted are deleted. Images, `state.db`, and `vectors.parquet` are never touched.
+
 ## Pipeline Phases
 
 | Command | Phase | Description |
@@ -207,6 +220,7 @@ uv run gme status
 | `gme qdrant-init` | 6 | Create Qdrant collection + payload indexes |
 | `gme qdrant-upsert` | 7 | Upsert vectors + payloads into Qdrant |
 | `gme verify` | 8 | Count match, spot-check, self-search sanity |
+| `gme cleanup [--dry-run]` | — | Delete fully-processed shard and result files |
 
 ## Configuration
 

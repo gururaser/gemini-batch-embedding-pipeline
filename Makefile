@@ -1,4 +1,4 @@
-.PHONY: up down sync pilot full verify lint
+.PHONY: up down sync pilot full verify cleanup lint
 
 up:
 	docker compose up -d
@@ -33,6 +33,9 @@ full:
 
 verify:
 	uv run gme verify
+
+cleanup:
+	uv run gme cleanup
 
 lint:
 	uv run ruff check src/

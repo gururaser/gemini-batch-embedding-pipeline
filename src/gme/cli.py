@@ -68,6 +68,15 @@ def verify() -> None:
     run_verify()
 
 
+@app.command("cleanup")
+def cleanup(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be deleted without deleting"),
+) -> None:
+    """Remove intermediate files (shards, results) that are no longer needed."""
+    from gme.cleanup import run_cleanup
+    run_cleanup(dry_run=dry_run)
+
+
 @app.command("status")
 def status() -> None:
     """Show current pipeline progress from state DB."""
