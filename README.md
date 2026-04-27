@@ -45,7 +45,7 @@ The pipeline is built around the Gemini Batch API (50% cost discount vs. synchro
 | 100,000 | $6.50 |
 | 1,000,000 | $65.00 |
 
-For the full ~105K dataset in this project, the estimated batch cost is **~$6.80**.
+For the full ~105K dataset in this project, the estimated batch cost is **$6.80**.
 
 ### Architecture
 
