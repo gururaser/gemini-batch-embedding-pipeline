@@ -1,3 +1,13 @@
+# Data directories
+data/
+!data/.gitkeep
+
+# Environment
+.env
+
+# Virtual environments
+.venv/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
