@@ -1,6 +1,10 @@
-# gemini-batch-embed
-
+# Gemini Multimodal Embeddings Pipeline
 ETL pipeline that generates multimodal (text + image) embeddings for H&M fashion products using the **Gemini Embedding 2** model via the **Gemini Batch API**, then stores them in **Qdrant** for vector search.
+
+
+<img width="1693" height="929" alt="high-level-architecture" src="https://github.com/user-attachments/assets/8a2884ca-c647-4a9f-a949-828abfc4ebf0" />
+
+
 
 ## Overview
 
@@ -263,3 +267,6 @@ data/
 ```bash
 make lint    # ruff check + format check
 ```
+
+## Big Thanks To
+❤️ Claude Code, Gemini CLI, Antigravity and GPT-Image 2.0 
