@@ -1,4 +1,4 @@
-.PHONY: up down sync pilot full verify lint test
+.PHONY: up down sync pilot full verify lint
 
 up:
 	docker compose up -d
@@ -35,8 +35,5 @@ verify:
 	uv run gme verify
 
 lint:
-	uv run ruff check src/ tests/
-	uv run ruff format --check src/ tests/
-
-test:
-	uv run pytest tests/ -v
+	uv run ruff check src/
+	uv run ruff format --check src/

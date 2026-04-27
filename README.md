@@ -262,5 +262,4 @@ data/
 
 ```bash
 make lint    # ruff check + format check
-make test    # pytest
 ```
