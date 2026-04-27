@@ -19,8 +19,8 @@ The pipeline is built around the Gemini Batch API (50% cost discount vs. synchro
 
 | Limit | Tier 1 | This pipeline |
 |---|---|---|
-| Batch enqueued tokens (Embedding) | 500,000 | ≤ 450,000 |
-| Concurrent batch jobs | 100 | ≤ 9 (with 40 records/shard ≈ 48K tokens/shard) |
+| Batch enqueued tokens (Embedding) | 500,000 | ≤ 432,000 |
+| Concurrent batch jobs | 100 | ≤ 9 (with 100 records/shard ≈ 33K tokens/shard) |
 
 ### Architecture
 
@@ -200,7 +200,7 @@ uv run gme status
 | Command | Phase | Description |
 |---|---|---|
 | `gme ingest` | 1 | Load HF parquet → SQLite state DB |
-| `gme download-images` | 2 | Download + cache images as JPEG ≤1024px |
+| `gme download-images` | 2 | Download + cache images as JPEG ≤512px |
 | `gme build-shards` | 3 | Partition records into JSONL batch files |
 | `gme submit` | 4 | Upload shards to Gemini, poll to completion |
 | `gme collect` | 5 | Download results → `vectors.parquet` |
@@ -260,6 +260,7 @@ data/
 - **Transient download failures**: retried 5× with exponential backoff
 - **Failed/expired batch jobs**: member records reset to `pending`, re-sharded on next `build-shards` run (max 3 attempts per record)
 - **Per-record failures within a succeeded batch**: individually marked failed; siblings unaffected
+- **Two parallel state spaces**: per-record `embed_status` (`pending → in_batch → ok/failed`) and per-batch-job lifecycle (`PENDING → SUBMITTED → RUNNING → SUCCEEDED/FAILED/EXPIRED`); a succeeded batch can still contain per-record errors — phase 5 reconciles both
 - **Qdrant upsert**: retried 3× via client; deterministic UUID5 IDs make re-runs safe
 
 ## Development
