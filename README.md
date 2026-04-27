@@ -195,6 +195,70 @@ uv run gme verify
 uv run gme status
 ```
 
+## Example Execution
+
+Below is a typical end-to-end run for a subset of the dataset:
+
+```bash
+$ uv run gme ingest --limit 2000
+Loading dataset 'Qdrant/hm_ecommerce_products' (train split)…
+Ingest complete. 2000 rows processed, 2000 new records inserted.
+
+$ uv run gme download-images
+Downloading 2000 images (concurrency=32)…
+Image download complete. ok=1982, failed_404=0, failed_other=18
+
+$ uv run gme build-shards
+Building shards for 1982 records (shard_size=40)…
+Built 50 shards in data/batches/in
+
+$ uv run gme submit
+[14:12:58] Submitted shard 0 → batch 79dxxx... (~13,200 tokens)
+[14:13:02] Submitted shard 1 → batch 1l4rxx... (~13,200 tokens)
+...
+[14:18:15] Batch 79dxxx... → SUCCEEDED
+[14:18:16] Batch 1l4rxx... → SUCCEEDED
+...
+All shards submitted and completed.
+
+$ uv run gme collect
+Collecting 50 completed batch(es)…
+Collect complete. Vectors written: 1982, failures: 0
+vectors.parquet total rows: 1982
+
+$ uv run gme qdrant-init
+Collection 'hm_products' created (dim=1536, COSINE, on-disk, binary quantization).
+
+$ uv run gme qdrant-upsert
+Loading vectors from parquet…
+Loaded 1982 vectors.
+Upserting 1982 points to 'hm_products'…
+Upsert complete.
+
+$ uv run gme verify
+                     Verification Checks                      
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Check                    ┃ Result                          ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ Count match              │ PASS (DB=1982, Qdrant=1982)     │
+├──────────────────────────┼─────────────────────────────────┤
+│ Spot-check 100           │ PASS (100/100 found)            │
+├──────────────────────────┼─────────────────────────────────┤
+│ Self-search (top-1=self) │ PASS (20/20)                    │
+├──────────────────────────┼─────────────────────────────────┤
+│ Cross-modal sanity       │ PASS (5/5 matched product_type) │
+└──────────────────────────┴─────────────────────────────────┘
+
+$ uv run gme cleanup
+Shards (data/batches/in):
+  50 of 50 shards fully embedded — eligible for deletion (57.3 MB)
+Results (data/batches/out):
+  50 of 50 result files fully upserted — eligible for deletion (37.2 MB)
+
+Total reclaimable: 94.5 MB
+Deleted 100 files, reclaimed 94.5 MB.
+```
+
 ### Clean up intermediates
 
 After a successful run, shard files (`data/batches/in/`) and result files (`data/batches/out/`) are no longer needed. Preview what's safe to delete, then reclaim the space:
