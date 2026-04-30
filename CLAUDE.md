@@ -9,6 +9,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 uv sync                         # install all deps into .venv
 docker compose up -d            # start local Qdrant on :6333
 
+# Dataset config (for new datasets; H&M default ships as dataset.yaml)
+uv run gme inspect --dataset <hf/dataset> --generate-config  # scaffold dataset.yaml
+uv run gme inspect --dataset <hf/dataset>                    # print schema only
+
 # Run a phase
 uv run gme <phase>              # see phases below
 uv run gme status               # check progress from state.db
@@ -60,9 +64,11 @@ data/
 
 ## Key Design Decisions
 
+**Generic dataset adapter** (`adapters.py`): `DatasetConfig` (loaded from `dataset.yaml`) drives the whole pipeline — which HF dataset, which columns are the ID / text / image, what goes in the Qdrant payload, and which payload fields get KEYWORD indexes. `HuggingFaceAdapter` normalises any HF dataset row into a `NormalizedRecord` and handles both URL-based and PIL-based image columns. `run_inspect` powers `gme inspect`.
+
 **SQLite as state store** (`state.py`): `records` table tracks per-row progress; `batches` table tracks Gemini batch job lifecycle. Always use `get_conn()` — it sets WAL mode, `busy_timeout=5000`, and auto-commits/rolls back.
 
-**Deterministic point IDs**: `uuid5(NAMESPACE_URL, article_id)` in `dataset.py`. Makes Qdrant upserts idempotent — re-running `qdrant-upsert` is always safe.
+**Deterministic point IDs**: `uuid5(NAMESPACE_URL, record_id)` in `dataset.py`. Makes Qdrant upserts idempotent — re-running `qdrant-upsert` is always safe.
 
 **Batch result parsing** (`batch_collect.py`): Each result JSONL line is `{"key": "<article_id>", "response": {"embeddings": [{"values": [...]}]}}` on success, or `{"key": "...", "error": {...}}` on per-record failure. Succeeded batches can still contain per-record errors — check both levels.
 
@@ -70,7 +76,9 @@ data/
 
 **Shard JSONL format** (`batch_builder.py`): Each line is `{"key": "<article_id>", "request": {"contents": [...text + inline_data base64...], "config": {"output_dimensionality": 1536}}}`. Images are embedded inline as base64 — shards can be large.
 
-**Qdrant collection**: 1536-dim COSINE, on-disk vectors + HNSW, binary quantization (`always_ram=True` keeps quantized index hot), on-disk payload. `qdrant_setup.py` creates KEYWORD payload indexes on 9 low-cardinality fields.
+**Qdrant payload exclusion**: Only `id_column` is auto-excluded from the payload (it becomes the point UUID). `image_column` and text-template columns are kept as useful search-result metadata. Extra columns can be excluded via `payload.exclude` in `dataset.yaml`.
+
+**Qdrant collection**: 1536-dim COSINE, on-disk vectors + HNSW, binary quantization (`always_ram=True` keeps quantized index hot), on-disk payload. `qdrant_setup.py` reads KEYWORD payload index definitions from `DatasetConfig.payload.indexes`.
 
 ## Configuration
 

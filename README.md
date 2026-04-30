@@ -10,12 +10,16 @@ ETL pipeline that generates multimodal (text + image) embeddings for H&M fashion
 
 ```
 HuggingFace Dataset          Gemini Batch API             Qdrant (local)
-  Qdrant/hm_ecommerce    →   gemini-embedding-2    →    hm_products collection
-  ~105,000 products          text + image (base64)       1536-dim COSINE vectors
-                             1536-dim Matryoshka          + metadata payload
+  any HF dataset         →   gemini-embedding-2    →    configurable collection
+  configured via              text + image (base64)       1536-dim COSINE vectors
+  dataset.yaml               1536-dim Matryoshka          + metadata payload
+
+  Default: Qdrant/hm_ecommerce_products (~105K products)
 ```
 
-The pipeline is built around the Gemini Batch API (50% cost discount vs. synchronous calls) and enforces Tier 1 rate limits at 90%:
+The pipeline is driven by `dataset.yaml` and works with any HuggingFace dataset. `gme inspect` auto-generates a starter config from any HF dataset schema.
+
+It is built around the Gemini Batch API (50% cost discount vs. synchronous calls) and enforces Tier 1 rate limits at 90%:
 
 | Limit | Tier 1 | This pipeline |
 |---|---|---|
@@ -145,11 +149,13 @@ flowchart TD
 
 ## Dataset
 
-[Qdrant/hm_ecommerce_products](https://huggingface.co/datasets/Qdrant/hm_ecommerce_products) — 105,000 H&M product rows with:
+The pipeline is configured by `dataset.yaml` in the repo root. The default ships with [Qdrant/hm_ecommerce_products](https://huggingface.co/datasets/Qdrant/hm_ecommerce_products) — 105,000 H&M product rows with:
 - `text_to_embed` — concatenated product attributes (name, type, color, description)
 - `image_url` — S3-hosted product image
 
-Precomputed embedding columns (`dense_embedding`, `sparse_indices`, `sparse_values`) are dropped. All other columns are stored as Qdrant payload.
+Precomputed embedding columns (`dense_embedding`, `sparse_indices`, `sparse_values`) are excluded via `payload.exclude`. All other columns (including `image_url`) are stored as Qdrant payload.
+
+To use a different dataset, run `gme inspect --dataset <org/name> --generate-config` to scaffold a new `dataset.yaml`, then edit as needed.
 
 ## Requirements
 
@@ -174,6 +180,10 @@ cp .env.example .env
 
 # 4. Start local Qdrant
 docker compose up -d
+
+# 5. (Optional) Use a different HuggingFace dataset
+uv run gme inspect --dataset <org/name> --generate-config
+# Edit dataset.yaml as needed, then proceed with gme ingest
 ```
 
 ## Running the Pipeline
@@ -301,19 +311,36 @@ The command queries `state.db` to determine eligibility — only files whose rec
 
 | Command | Phase | Description |
 |---|---|---|
-| `gme ingest` | 1 | Load HF parquet → SQLite state DB |
+| `gme inspect --dataset <name> [--generate-config]` | — | Print HF dataset schema; optionally scaffold `dataset.yaml` |
+| `gme ingest` | 1 | Load HF dataset → SQLite state DB (driven by `dataset.yaml`) |
 | `gme download-images` | 2 | Download + cache images as JPEG ≤512px |
 | `gme build-shards` | 3 | Partition records into JSONL batch files |
 | `gme submit` | 4 | Upload shards to Gemini, poll to completion |
 | `gme collect` | 5 | Download results → `vectors.parquet` |
-| `gme qdrant-init` | 6 | Create Qdrant collection + payload indexes |
+| `gme qdrant-init` | 6 | Create Qdrant collection + payload indexes (from `dataset.yaml`) |
 | `gme qdrant-upsert` | 7 | Upsert vectors + payloads into Qdrant |
 | `gme verify` | 8 | Count match, spot-check, self-search sanity |
 | `gme cleanup [--dry-run]` | — | Delete fully-processed shard and result files |
 
 ## Configuration
 
-All tunable via `.env`:
+### `dataset.yaml` — dataset mapping
+
+| Field | Description |
+|---|---|
+| `dataset` | HuggingFace dataset name (e.g. `Qdrant/hm_ecommerce_products`) |
+| `split` | Dataset split (default `train`) |
+| `id_column` | Column to use as the unique record ID (becomes point UUID seed) |
+| `text_template` | Python format string for text embedding (e.g. `"{title} {body}"`) |
+| `image_column` | Column containing image URLs (string) or PIL images |
+| `modality` | `text`, `image`, or `multimodal` |
+| `payload.include` | Explicit whitelist of columns to store in Qdrant (default: all except excluded) |
+| `payload.exclude` | Columns to drop from payload (e.g. precomputed embeddings) |
+| `payload.indexes` | Columns to index in Qdrant as `keyword` for fast filtering |
+
+Run `gme inspect --dataset <name> --generate-config` to generate a starter `dataset.yaml`.
+
+### `.env` — runtime tuning
 
 | Variable | Default | Description |
 |---|---|---|
@@ -331,8 +358,8 @@ All tunable via `.env`:
 
 - **Vectors**: 1536-dim, COSINE distance, on-disk HNSW (`m=16`, `ef_construct=128`)
 - **Quantization**: Binary quantization (`always_ram=True`) — reduces index memory ~32× vs. float32
-- **Payload**: all dataset metadata columns except precomputed embeddings
-- **Payload indexes (KEYWORD)**: `product_type_name`, `product_group_name`, `colour_group_name`, `perceived_colour_master_name`, `index_group_name`, `garment_group_name`, `department_name`, `section_name`, `article_id`
+- **Payload**: all columns except `id_column` (becomes point UUID) and any explicit `payload.exclude`. `image_column` and text-template columns are kept as useful search-result metadata
+- **Payload indexes**: defined in `dataset.yaml` under `payload.indexes`. Default for H&M: KEYWORD indexes on `article_id`, `product_type_name`, `product_group_name`, `colour_group_name`, `perceived_colour_master_name`, `index_group_name`, `garment_group_name`, `department_name`, `section_name`
 
 ### Point Example from Qdrant Collection
 <img width="1725" height="1100" alt="image" src="https://github.com/user-attachments/assets/222177a4-ec8d-44b6-bb30-e2844a4b498f" />
@@ -341,12 +368,14 @@ All tunable via `.env`:
 ## Project Structure
 
 ```
+dataset.yaml         # dataset mapping config (id / text / image / payload columns)
 src/gme/
+  adapters.py        # DatasetConfig, HuggingFaceAdapter, NormalizedRecord, gme inspect
   config.py          # pydantic-settings (env-driven)
   state.py           # SQLite WAL state store
-  dataset.py         # phase 1: ingest
+  dataset.py         # phase 1: ingest (thin wrapper over HuggingFaceAdapter)
   images.py          # phase 2: image download
-  batch_builder.py   # phase 3: JSONL shard builder
+  batch_builder.py   # phase 3: JSONL shard builder (modality-aware)
   batch_submit.py    # phase 4: Gemini Batch submit + poll daemon
   batch_collect.py   # phase 5: result collection → parquet
   qdrant_setup.py    # phase 6: collection + index creation
