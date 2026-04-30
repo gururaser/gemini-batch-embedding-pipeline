@@ -21,10 +21,11 @@ def _build_request(
     image_path: Path | None,
     embedding_dim: int,
     modality: str,
-) -> dict:
+) -> dict | None:
     """Build a Gemini batch embedding request line for one record.
 
     Includes only the parts (text, image) that the modality requires.
+    Returns None if there is no embeddable content for this record.
     """
     parts: list[dict] = []
     if modality in ("text", "multimodal") and text:
@@ -32,6 +33,8 @@ def _build_request(
     if modality in ("image", "multimodal") and image_path and image_path.exists():
         b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
         parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64}})
+    if not parts:
+        return None
     return {
         "key": article_id,
         "request": {
@@ -41,12 +44,12 @@ def _build_request(
     }
 
 
-def run_build_shards(settings: Settings | None = None) -> None:
+def run_build_shards(settings: Settings | None = None, cfg: DatasetConfig | None = None) -> None:
     """Phase 3: partition pending embeddable records into JSONL shard files."""
     if settings is None:
         settings = get_settings()
-
-    cfg = DatasetConfig.from_yaml("dataset.yaml")
+    if cfg is None:
+        cfg = DatasetConfig.from_yaml("dataset.yaml")
     settings.ensure_dirs()
 
     with get_conn(settings.state_db) as conn:
@@ -79,6 +82,13 @@ def run_build_shards(settings: Settings | None = None) -> None:
             request_line = _build_request(
                 article_id, text, image_path, settings.embedding_dim, cfg.modality
             )
+            if request_line is None:
+                print(
+                    f"[yellow]Skipping {article_id!r} — no embeddable content "
+                    f"(empty text and missing image).[/yellow]"
+                )
+                progress.advance(task)
+                continue
             shard.append(request_line)
             article_ids_in_shard.append(article_id)
 

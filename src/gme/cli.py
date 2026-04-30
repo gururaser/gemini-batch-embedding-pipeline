@@ -62,11 +62,15 @@ def download_images() -> None:
 
 
 @app.command("build-shards")
-def build_shards() -> None:
+def build_shards(
+    config: Path = typer.Option(Path("dataset.yaml"), "--config", help="Path to dataset.yaml"),
+) -> None:
     """Phase 3: Partition embeddable records into JSONL shard files."""
+    from gme.adapters import DatasetConfig
     from gme.batch_builder import run_build_shards
 
-    run_build_shards()
+    cfg = DatasetConfig.from_yaml(config) if config.exists() else None
+    run_build_shards(cfg=cfg)
 
 
 @app.command("submit")
@@ -86,11 +90,15 @@ def collect() -> None:
 
 
 @app.command("qdrant-init")
-def qdrant_init() -> None:
+def qdrant_init(
+    config: Path = typer.Option(Path("dataset.yaml"), "--config", help="Path to dataset.yaml"),
+) -> None:
     """Phase 6: Create Qdrant collection and payload indexes."""
+    from gme.adapters import DatasetConfig
     from gme.qdrant_setup import run_qdrant_init
 
-    run_qdrant_init()
+    cfg = DatasetConfig.from_yaml(config) if config.exists() else None
+    run_qdrant_init(cfg=cfg)
 
 
 @app.command("qdrant-upsert")

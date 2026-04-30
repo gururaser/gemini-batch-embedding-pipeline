@@ -21,11 +21,11 @@ def get_qdrant_client(settings: Settings) -> QdrantClient:
     return QdrantClient(**kwargs)
 
 
-def run_qdrant_init(settings: Settings | None = None) -> None:
+def run_qdrant_init(settings: Settings | None = None, cfg: DatasetConfig | None = None) -> None:
     if settings is None:
         settings = get_settings()
-
-    cfg = DatasetConfig.from_yaml("dataset.yaml")
+    if cfg is None:
+        cfg = DatasetConfig.from_yaml("dataset.yaml")
     client = get_qdrant_client(settings)
     collection = settings.qdrant_collection
 
