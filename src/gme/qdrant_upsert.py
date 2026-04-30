@@ -26,24 +26,26 @@ def run_qdrant_upsert(settings: Settings | None = None) -> None:
         print("vectors.parquet not found — run 'gme collect' first.")
         return
 
-    # Build vector lookup: article_id → vector
-    print("Loading vectors from parquet…")
-    tbl = pq.read_table(settings.vectors_parquet)
-    vector_map: dict[str, list[float]] = {}
-    for batch in tbl.to_batches():
-        aids = batch.column("article_id").to_pylist()
-        vecs = batch.column("vector").to_pylist()
-        for aid, vec in zip(aids, vecs):
-            vector_map[aid] = vec
-
-    print(f"Loaded {len(vector_map)} vectors.")
-
     with get_conn(settings.state_db) as conn:
         pending = get_upsert_pending(conn)
 
     if not pending:
         print("No records pending upsert.")
         return
+
+    # Load vectors only for the pending records, not the entire parquet
+    pending_ids = {str(r["article_id"]) for r in pending}
+    print(f"Loading vectors for {len(pending_ids)} pending records from parquet…")
+    tbl = pq.read_table(settings.vectors_parquet)
+    vector_map: dict[str, list[float]] = {}
+    for batch in tbl.to_batches():
+        aids = batch.column("article_id").to_pylist()
+        vecs = batch.column("vector").to_pylist()
+        for aid, vec in zip(aids, vecs):
+            if aid in pending_ids:
+                vector_map[aid] = vec
+
+    print(f"Loaded {len(vector_map)} vectors.")
 
     # Filter to records with vectors
     to_upsert = [r for r in pending if str(r["article_id"]) in vector_map]

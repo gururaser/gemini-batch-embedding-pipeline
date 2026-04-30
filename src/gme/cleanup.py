@@ -1,5 +1,10 @@
 from pathlib import Path
 
+from rich.console import Console
+
+from gme.config import get_settings
+from gme.state import get_conn
+
 
 def _fmt_bytes(n: int) -> str:
     if n >= 1024 ** 2:
@@ -58,18 +63,12 @@ def _eligible_results(conn, batches_out_dir: Path) -> tuple[list[tuple[Path, int
 
 
 def run_cleanup(dry_run: bool = False) -> None:
-    import typer
-    from rich.console import Console
-
-    from gme.config import get_settings
-    from gme.state import get_conn
-
     console = Console()
     settings = get_settings()
 
     if not settings.state_db.exists():
         console.print("[yellow]No state DB found. Run 'gme ingest' first.[/yellow]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     with get_conn(settings.state_db) as conn:
         shards, total_shards = _eligible_shards(conn)
