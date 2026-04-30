@@ -13,6 +13,7 @@ PAYLOAD_UUID_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # NA
 
 
 def _make_point_uuid(record_id: str) -> str:
+    """Return a deterministic UUID5 for a record_id, making Qdrant upserts idempotent."""
     return str(uuid.uuid5(PAYLOAD_UUID_NAMESPACE, record_id))
 
 
@@ -22,6 +23,7 @@ def _flush_to_db(
     pil_ok: list[tuple[str, str]],
     pil_failed: list[str],
 ) -> int:
+    """Write a batch of records and image statuses to the state DB; return new-insert count."""
     with get_conn(db_path) as conn:
         count = insert_records(conn, batch)
         for article_id, sha256 in pil_ok:
@@ -36,6 +38,7 @@ def run_ingest(
     settings: Settings | None = None,
     cfg: DatasetConfig | None = None,
 ) -> None:
+    """Phase 1: stream HuggingFace dataset rows into the SQLite state DB."""
     if settings is None:
         settings = get_settings()
     if cfg is None:

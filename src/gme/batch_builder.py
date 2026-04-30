@@ -22,6 +22,10 @@ def _build_request(
     embedding_dim: int,
     modality: str,
 ) -> dict:
+    """Build a Gemini batch embedding request line for one record.
+
+    Includes only the parts (text, image) that the modality requires.
+    """
     parts: list[dict] = []
     if modality in ("text", "multimodal") and text:
         parts.append({"text": text})
@@ -38,6 +42,7 @@ def _build_request(
 
 
 def run_build_shards(settings: Settings | None = None) -> None:
+    """Phase 3: partition pending embeddable records into JSONL shard files."""
     if settings is None:
         settings = get_settings()
 
@@ -99,6 +104,7 @@ def _flush_shard(
     shard_id: int,
     settings: Settings,
 ) -> None:
+    """Write shard JSONL to disk and record the batch + shard assignments in the state DB."""
     shard_path = settings.batches_in_dir / f"shard_{shard_id:05d}.jsonl"
     with open(shard_path, "w") as f:
         for line in shard:
@@ -112,6 +118,7 @@ def _flush_shard(
 
 
 def _get_next_shard_id(settings: Settings) -> int:
+    """Return the next available shard_id (max existing + 1, or 0 if none)."""
     with get_conn(settings.state_db) as conn:
         row = conn.execute("SELECT MAX(shard_id) FROM batches").fetchone()
         if row[0] is None:

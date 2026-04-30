@@ -15,6 +15,8 @@ from rich import print as rprint
 
 @dataclass
 class PayloadConfig:
+    """Which columns to store in the Qdrant payload and which to index."""
+
     include: list[str] | None = None
     exclude: list[str] = field(default_factory=list)
     indexes: dict[str, str] = field(default_factory=dict)
@@ -22,6 +24,8 @@ class PayloadConfig:
 
 @dataclass
 class DatasetConfig:
+    """Full dataset mapping: HF source, column roles, embedding modality, and payload config."""
+
     dataset: str
     split: str = "train"
     id_column: str | None = None
@@ -32,6 +36,10 @@ class DatasetConfig:
 
     @classmethod
     def from_yaml(cls, path: Path | str) -> DatasetConfig:
+        """Load config from a YAML file using safe_load.
+
+        Raises ValueError if 'dataset' is absent.
+        """
         import yaml
 
         with open(path) as f:
@@ -64,6 +72,7 @@ class DatasetConfig:
         image_column: str | None = None,
         modality: str | None = None,
     ) -> None:
+        """Merge CLI flag values into this config, silently ignoring any that are None."""
         if dataset is not None:
             self.dataset = dataset
         if split is not None:
@@ -78,9 +87,14 @@ class DatasetConfig:
             self.modality = modality  # type: ignore[assignment]
 
     def template_columns(self) -> set[str]:
+        """Parse field names referenced in text_template.
+
+        e.g. '{title} {body}' → {'title', 'body'}
+        """
         return {fn for _, fn, _, _ in string.Formatter().parse(self.text_template) if fn}
 
     def excluded_from_payload(self) -> set[str]:
+        """Return columns never stored in the Qdrant payload; only id_column is auto-excluded."""
         cols: set[str] = set()
         if self.id_column:
             cols.add(self.id_column)
@@ -88,6 +102,7 @@ class DatasetConfig:
         return cols
 
     def payload_columns(self, all_columns: list[str]) -> list[str]:
+        """Return the ordered list of columns to store, honouring payload.include when set."""
         excluded = self.excluded_from_payload()
         if self.payload.include is not None:
             return [c for c in self.payload.include if c not in excluded]
@@ -99,6 +114,8 @@ class DatasetConfig:
 
 @dataclass
 class NormalizedRecord:
+    """A single dataset row normalised into the shape the ingest pipeline expects."""
+
     record_id: str
     text: str
     image_url: str
@@ -111,7 +128,15 @@ class NormalizedRecord:
 
 
 class HuggingFaceAdapter:
+    """Loads a HuggingFace dataset and iterates it as NormalizedRecord objects."""
+
     def __init__(self, cfg: DatasetConfig, images_dir: Path, max_side_px: int = 512) -> None:
+        """
+        Args:
+            cfg: Dataset configuration (columns, modality, payload rules).
+            images_dir: Directory where PIL images are written as SHA256-named JPEGs.
+            max_side_px: Longest side in pixels when normalizing PIL images.
+        """
         self._cfg = cfg
         self._images_dir = images_dir
         self._max_side_px = max_side_px
@@ -119,6 +144,7 @@ class HuggingFaceAdapter:
         self._image_type: str | None = None  # "url" | "pil"
 
     def load(self) -> None:
+        """Download and validate the dataset; must be called before iter_records() or total."""
         import datasets as hf
 
         cfg = self._cfg
@@ -169,11 +195,13 @@ class HuggingFaceAdapter:
 
     @property
     def total(self) -> int:
+        """Number of rows in the loaded dataset split."""
         if self._ds is None:
             raise RuntimeError("Call load() first.")
         return len(self._ds)
 
     def iter_records(self, limit: int | None = None) -> Iterator[NormalizedRecord]:
+        """Yield NormalizedRecord for each row, optionally capped at limit rows."""
         if self._ds is None:
             raise RuntimeError("Call load() first.")
 
@@ -235,6 +263,10 @@ class HuggingFaceAdapter:
             )
 
     def _write_pil_image(self, pil_img: object, record_id: str) -> Path | None:
+        """Save a PIL image to images_dir as a normalized JPEG.
+
+        Returns the path on success, or None if the image is missing or write fails.
+        """
         if pil_img is None:
             return None
         try:
@@ -262,6 +294,7 @@ def run_inspect(
     generate_config: bool = False,
     config_path: Path = Path("dataset.yaml"),
 ) -> None:
+    """Print a column schema table for a HuggingFace dataset and optionally write dataset.yaml."""
     import datasets as hf
     import yaml
     from rich import print as rprint
@@ -354,6 +387,7 @@ def run_inspect(
 
 
 def _feature_type_str(feat: object) -> str:
+    """Return a human-readable type string for a HuggingFace feature descriptor."""
     import datasets as hf
 
     if isinstance(feat, hf.Image):
