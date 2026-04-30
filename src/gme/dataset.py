@@ -4,48 +4,39 @@ import uuid
 from rich import print
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
 
+from gme.adapters import DatasetConfig, HuggingFaceAdapter
 from gme.config import Settings, get_settings
-from gme.state import get_conn, init_db, insert_records
+from gme.state import get_conn, init_db, insert_records, set_image_status
 
 PAYLOAD_UUID_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # NAMESPACE_URL
 
 
-def _make_point_uuid(article_id: str) -> str:
-    """Generate a deterministic UUID v5 for a given article ID."""
-    return str(uuid.uuid5(PAYLOAD_UUID_NAMESPACE, article_id))
+def _make_point_uuid(record_id: str) -> str:
+    return str(uuid.uuid5(PAYLOAD_UUID_NAMESPACE, record_id))
 
 
-def _make_payload(row: dict, exclude: list[str]) -> dict:
-    """Create a cleaned payload dictionary by excluding specified columns."""
-    return {k: v for k, v in row.items() if k not in exclude and not _is_embedding_col(k)}
-
-
-def _is_embedding_col(key: str) -> bool:
-    """Check if a column is an embedding column (legacy filter)."""
-    return False  # filtering done via exclude list in config
-
-
-def run_ingest(limit: int | None = None, settings: Settings | None = None) -> None:
-    """
-    Load the dataset from Hugging Face and ingest it into the local state database.
-    Pre-calculates UUIDs and cleans payloads for later upsert.
-    """
+def run_ingest(
+    limit: int | None = None,
+    settings: Settings | None = None,
+    cfg: DatasetConfig | None = None,
+) -> None:
     if settings is None:
         settings = get_settings()
+    if cfg is None:
+        cfg = DatasetConfig.from_yaml("dataset.yaml")
 
     settings.ensure_dirs()
     init_db(settings.state_db)
 
-    from datasets import load_dataset  # lazy import
+    adapter = HuggingFaceAdapter(cfg, settings.images_dir, settings.image_max_side_px)
+    adapter.load()
 
-    print(f"Loading dataset {settings.hf_dataset!r} ({settings.dataset_split} split)…")
-    ds = load_dataset(settings.hf_dataset, split=settings.dataset_split)
+    print(f"Loading dataset {cfg.dataset!r} ({cfg.split} split, {adapter.total:,} rows)…")
 
-    if limit is not None:
-        ds = ds.select(range(min(limit, len(ds))))
-
-    exclude_set = set(settings.exclude_columns)
-    total = len(ds)
+    batch: list[dict] = []
+    pil_ok: list[tuple[str, str]] = []
+    pil_failed: list[str] = []
+    inserted_total = 0
 
     with Progress(
         SpinnerColumn(),
@@ -54,50 +45,43 @@ def run_ingest(limit: int | None = None, settings: Settings | None = None) -> No
         MofNCompleteColumn(),
         transient=True,
     ) as progress:
-        task = progress.add_task("Ingesting records…", total=total)
+        task = progress.add_task("Ingesting records…", total=adapter.total)
 
-        batch_size = 500
-        inserted_total = 0
-
-        batch: list[dict] = []
-
-        for row in ds:
-            row = dict(row)
-            article_id = str(row["article_id"])
-            image_url = row.get("image_url", "")
-
-            payload = {
-                k: v
-                for k, v in row.items()
-                if k not in exclude_set and k not in settings.exclude_columns
-            }
-            # Serialize non-primitive values
-            payload_clean: dict = {}
-            for k, v in payload.items():
-                if isinstance(v, (str, int, float, bool)) or v is None:
-                    payload_clean[k] = v
-                else:
-                    payload_clean[k] = str(v)
-
+        for record in adapter.iter_records(limit=limit):
             batch.append({
-                "article_id": article_id,
-                "point_uuid": _make_point_uuid(article_id),
-                "image_url": image_url,
-                "payload_json": json.dumps(payload_clean),
+                "article_id": record.record_id,
+                "point_uuid": _make_point_uuid(record.record_id),
+                "image_url": record.image_url,
+                "payload_json": json.dumps(record.payload),
             })
 
-            if len(batch) >= batch_size:
-                with get_conn(settings.state_db) as inner_conn:
-                    inserted_total += insert_records(inner_conn, batch)
+            if record.image_path is not None:
+                pil_ok.append((record.record_id, record.image_path.stem))
+            elif record.pil_failed:
+                pil_failed.append(record.record_id)
+
+            if len(batch) >= 500:
+                with get_conn(settings.state_db) as conn:
+                    inserted_total += insert_records(conn, batch)
+                    for article_id, sha256 in pil_ok:
+                        set_image_status(conn, article_id, "ok", sha256)
+                    for article_id in pil_failed:
+                        set_image_status(conn, article_id, "failed", None)
                 batch.clear()
+                pil_ok.clear()
+                pil_failed.clear()
 
             progress.advance(task)
 
-        if batch:
-            with get_conn(settings.state_db) as inner_conn:
-                inserted_total += insert_records(inner_conn, batch)
+    if batch:
+        with get_conn(settings.state_db) as conn:
+            inserted_total += insert_records(conn, batch)
+            for article_id, sha256 in pil_ok:
+                set_image_status(conn, article_id, "ok", sha256)
+            for article_id in pil_failed:
+                set_image_status(conn, article_id, "failed", None)
 
     print(
-        f"[green]Ingest complete.[/green] {total} rows processed, "
+        f"[green]Ingest complete.[/green] {adapter.total} rows processed, "
         f"{inserted_total} new records inserted."
     )

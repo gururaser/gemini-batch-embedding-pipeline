@@ -11,7 +11,9 @@ def _fmt_bytes(n: int) -> str:
 
 def _eligible_shards(conn) -> tuple[list[tuple[Path, int]], int]:
     """Return (eligible_files, total_shard_count) where eligible files are fully embedded."""
-    total = conn.execute("SELECT COUNT(*) FROM batches WHERE request_file IS NOT NULL").fetchone()[0]
+    total = conn.execute(
+        "SELECT COUNT(*) FROM batches WHERE request_file IS NOT NULL"
+    ).fetchone()[0]
     rows = conn.execute(
         """
         SELECT b.request_file

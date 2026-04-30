@@ -1,0 +1,23 @@
+dataset: Qdrant/hm_ecommerce_products
+split: train
+
+id_column: article_id
+text_template: "{text_to_embed}"
+image_column: image_url
+modality: multimodal
+
+payload:
+  exclude:
+    - dense_embedding
+    - sparse_indices
+    - sparse_values
+  indexes:
+    article_id: keyword
+    product_type_name: keyword
+    product_group_name: keyword
+    colour_group_name: keyword
+    perceived_colour_master_name: keyword
+    index_group_name: keyword
+    garment_group_name: keyword
+    department_name: keyword
+    section_name: keyword

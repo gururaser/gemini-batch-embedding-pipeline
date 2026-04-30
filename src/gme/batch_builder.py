@@ -5,6 +5,7 @@ from pathlib import Path
 from rich import print
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
+from gme.adapters import DatasetConfig
 from gme.config import Settings, get_settings
 from gme.state import (
     assign_to_shard,
@@ -17,47 +18,37 @@ from gme.state import (
 def _build_request(
     article_id: str,
     text: str,
-    image_path: Path,
+    image_path: Path | None,
     embedding_dim: int,
+    modality: str,
 ) -> dict:
-    """Construct a Gemini batch request dictionary for a single product."""
-    image_bytes = image_path.read_bytes()
-    b64 = base64.b64encode(image_bytes).decode("ascii")
+    parts: list[dict] = []
+    if modality in ("text", "multimodal") and text:
+        parts.append({"text": text})
+    if modality in ("image", "multimodal") and image_path and image_path.exists():
+        b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64}})
     return {
         "key": article_id,
         "request": {
             "output_dimensionality": embedding_dim,
-            "content": {
-                "parts": [
-                    {"text": text},
-                    {"inline_data": {"mime_type": "image/jpeg", "data": b64}},
-                ]
-            },
+            "content": {"parts": parts},
         },
     }
 
 
-def _get_text_to_embed(payload_json: str) -> str:
-    """Extract the text to be embedded from a JSON payload string."""
-    payload = json.loads(payload_json)
-    return payload.get("text_to_embed", "")
-
-
 def run_build_shards(settings: Settings | None = None) -> None:
-    """
-    Groups embeddable records into JSONL shards ready for Gemini batch submission.
-    Each shard is tracked in the state database.
-    """
     if settings is None:
         settings = get_settings()
 
+    cfg = DatasetConfig.from_yaml("dataset.yaml")
     settings.ensure_dirs()
 
     with get_conn(settings.state_db) as conn:
-        records = get_embeddable_records(conn)
+        records = get_embeddable_records(conn, modality=cfg.modality)
 
     if not records:
-        print("No records ready for sharding (embed_status=pending, image_status=ok).")
+        print("No records ready for sharding (embed_status=pending, image ready).")
         return
 
     print(f"Building shards for {len(records)} records (shard_size={settings.records_per_shard})…")
@@ -75,17 +66,14 @@ def run_build_shards(settings: Settings | None = None) -> None:
         for row in records:
             article_id = str(row["article_id"])
             sha256 = row["image_sha256"]
-            image_path = settings.images_dir / f"{sha256}.jpg"
+            image_path = settings.images_dir / f"{sha256}.jpg" if sha256 else None
 
-            if not image_path.exists():
-                progress.advance(task)
-                continue
+            payload = json.loads(row["payload_json"] or "{}")
+            text = cfg.text_template.format_map(payload) if cfg.text_template else ""
 
-            payload_json = row["payload_json"] or "{}"
-            payload = json.loads(payload_json)
-            text = payload.get("text_to_embed", "")
-
-            request_line = _build_request(article_id, text, image_path, settings.embedding_dim)
+            request_line = _build_request(
+                article_id, text, image_path, settings.embedding_dim, cfg.modality
+            )
             shard.append(request_line)
             article_ids_in_shard.append(article_id)
 
@@ -111,7 +99,6 @@ def _flush_shard(
     shard_id: int,
     settings: Settings,
 ) -> None:
-    """Write a shard to a JSONL file and record it in the state database."""
     shard_path = settings.batches_in_dir / f"shard_{shard_id:05d}.jsonl"
     with open(shard_path, "w") as f:
         for line in shard:
@@ -125,7 +112,6 @@ def _flush_shard(
 
 
 def _get_next_shard_id(settings: Settings) -> int:
-    """Determine the next available shard ID from the database."""
     with get_conn(settings.state_db) as conn:
         row = conn.execute("SELECT MAX(shard_id) FROM batches").fetchone()
         if row[0] is None:

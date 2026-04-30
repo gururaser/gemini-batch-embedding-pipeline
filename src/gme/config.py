@@ -36,11 +36,6 @@ class Settings(BaseSettings):
     image_download_concurrency: int = Field(32, alias="IMAGE_DOWNLOAD_CONCURRENCY")
     image_max_side_px: int = Field(512, alias="IMAGE_MAX_SIDE_PX")
 
-    # Dataset
-    hf_dataset: str = "Qdrant/hm_ecommerce_products"
-    dataset_split: str = "train"
-    exclude_columns: list[str] = ["dense_embedding", "sparse_indices", "sparse_values"]
-
     @computed_field  # type: ignore[misc]
     @property
     def raw_dir(self) -> Path:
