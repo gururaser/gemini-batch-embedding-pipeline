@@ -149,7 +149,7 @@ class HuggingFaceAdapter:
             feat = ds.features[cfg.image_column]
             if isinstance(feat, hf.Image):
                 self._image_type = "pil"
-            elif isinstance(feat, hf.Value) and feat.dtype == "string":
+            elif isinstance(feat, hf.Value) and feat.dtype in ("string", "large_string"):
                 self._image_type = "url"
             else:
                 raise ValueError(
@@ -301,7 +301,7 @@ def run_inspect(
             notes = "image column"
             if image_col_guess is None:
                 image_col_guess = col_name
-        elif isinstance(feat, hf.Value) and feat.dtype == "string":
+        elif isinstance(feat, hf.Value) and feat.dtype in ("string", "large_string"):
             string_cols.append(col_name)
             if col_name.lower() in id_candidates:
                 values = [str(sample[i][col_name]) for i in range(len(sample))]
