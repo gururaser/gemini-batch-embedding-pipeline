@@ -21,6 +21,8 @@ def _build_request(
     image_path: Path | None,
     embedding_dim: int,
     modality: str,
+    model: str,
+    task_type: str = "RETRIEVAL_DOCUMENT",
 ) -> dict | None:
     """Build a Gemini batch embedding request line for one record.
 
@@ -35,9 +37,15 @@ def _build_request(
         parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64}})
     if not parts:
         return None
+
+    # Ensure model has 'models/' prefix if it looks like a short name
+    full_model = model if "/" in model else f"models/{model}"
+
     return {
         "key": article_id,
         "request": {
+            "model": full_model,
+            "task_type": task_type,
             "output_dimensionality": embedding_dim,
             "content": {"parts": parts},
         },
@@ -80,7 +88,12 @@ def run_build_shards(settings: Settings | None = None, cfg: DatasetConfig | None
             text = cfg.text_template.format_map(payload) if cfg.text_template else ""
 
             request_line = _build_request(
-                article_id, text, image_path, settings.embedding_dim, cfg.modality
+                article_id,
+                text,
+                image_path,
+                settings.embedding_dim,
+                cfg.modality,
+                settings.gemini_model,
             )
             if request_line is None:
                 print(

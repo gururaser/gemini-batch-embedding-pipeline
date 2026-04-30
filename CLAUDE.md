@@ -74,7 +74,7 @@ data/
 
 **Image pipeline** (`images.py`): Downloaded async (httpx, HTTP/2, semaphore=32), normalized to JPEG at ≤512px longest side via PIL, stored at `data/images/<sha256>.jpg`. SHA256 filename makes the cache idempotent.
 
-**Shard JSONL format** (`batch_builder.py`): Each line is `{"key": "<article_id>", "request": {"contents": [...text + inline_data base64...], "config": {"output_dimensionality": 1536}}}`. Images are embedded inline as base64 — shards can be large.
+**Shard JSONL format** (`batch_builder.py`): Each line is `{"key": "<article_id>", "request": {"model": "...", "task_type": "...", "output_dimensionality": 1536, "content": {"parts": [...text + inline_data base64...]}}}`. Images are embedded inline as base64 — shards can be large.
 
 **Qdrant payload exclusion**: Only `id_column` is auto-excluded from the payload (it becomes the point UUID). `image_column` and text-template columns are kept as useful search-result metadata. Extra columns can be excluded via `payload.exclude` in `dataset.yaml`.
 
