@@ -70,7 +70,7 @@ data/
 
 **Deterministic point IDs**: `uuid5(NAMESPACE_URL, record_id)` in `dataset.py`. Makes Qdrant upserts idempotent — re-running `qdrant-upsert` is always safe.
 
-**Batch result parsing** (`batch_collect.py`): Each result JSONL line is `{"key": "<article_id>", "response": {"embeddings": [{"values": [...]}]}}` on success, or `{"key": "...", "error": {...}}` on per-record failure. Succeeded batches can still contain per-record errors — check both levels.
+**Batch result parsing** (`batch_collect.py`): Each result JSONL line is `{"key": "<article_id>", "response": {"embedding": {"values": [...]}}}` on success, or `{"key": "...", "error": {...}}` on per-record failure. Succeeded batches can still contain per-record errors — check both levels.
 
 **Image pipeline** (`images.py`): Downloaded async (httpx, HTTP/2, semaphore=32), normalized to JPEG at ≤512px longest side via PIL, stored at `data/images/<sha256>.jpg`. SHA256 filename makes the cache idempotent.
 

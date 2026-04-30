@@ -13,6 +13,17 @@ from rich import print as rprint
 # ── Config ───────────────────────────────────────────────────────────────────
 
 
+_VALID_MODALITIES = {"text", "image", "multimodal"}
+
+
+def _validated_modality(value: str, source: object) -> str:
+    if value not in _VALID_MODALITIES:
+        raise ValueError(
+            f"{source}: modality must be one of {sorted(_VALID_MODALITIES)}, got {value!r}"
+        )
+    return value
+
+
 @dataclass
 class PayloadConfig:
     """Which columns to store in the Qdrant payload and which to index."""
@@ -55,7 +66,7 @@ class DatasetConfig:
             id_column=data.get("id_column"),
             text_template=data.get("text_template", ""),
             image_column=data.get("image_column"),
-            modality=data.get("modality", "multimodal"),
+            modality=_validated_modality(data.get("modality", "multimodal"), path),
             payload=PayloadConfig(
                 include=p.get("include"),
                 exclude=p.get("exclude") or [],
@@ -270,11 +281,20 @@ class HuggingFaceAdapter:
         if pil_img is None:
             return None
         try:
-            from gme.images import _normalize_image, _sha256
+            from PIL import Image
 
+            from gme.images import _sha256
+
+            img = pil_img  # type: ignore[union-attr]
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            w, h = img.size
+            if max(w, h) > self._max_side_px:
+                ratio = self._max_side_px / max(w, h)
+                img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
             buf = io.BytesIO()
-            pil_img.save(buf, format="JPEG", quality=95)  # type: ignore[union-attr]
-            normalized = _normalize_image(buf.getvalue(), self._max_side_px)
+            img.save(buf, format="JPEG", quality=85, optimize=True)
+            normalized = buf.getvalue()
             sha = _sha256(normalized)
             path = self._images_dir / f"{sha}.jpg"
             if not path.exists():
