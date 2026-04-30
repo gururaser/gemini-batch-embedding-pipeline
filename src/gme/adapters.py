@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from rich import print as rprint
+
 # ── Config ───────────────────────────────────────────────────────────────────
 
 
@@ -185,13 +187,10 @@ class HuggingFaceAdapter:
         for idx, row in enumerate(ds):
             row = dict(row)
 
-            # Record ID
             if cfg.id_column:
                 record_id = str(row[cfg.id_column])
             else:
                 if not id_warned:
-                    from rich import print as rprint
-
                     rprint(
                         "[yellow]Warning: no id_column set — using row index. "
                         "Point IDs will not survive dataset updates.[/yellow]"
@@ -199,25 +198,20 @@ class HuggingFaceAdapter:
                     id_warned = True
                 record_id = str(idx)
 
-            # Text
             try:
                 text = cfg.text_template.format_map(row) if cfg.text_template else ""
             except KeyError as e:
-                from rich import print as rprint
-
                 rprint(
                     f"[yellow]Warning: text_template missing key {e} "
                     f"for record {record_id!r} — skipping.[/yellow]"
                 )
                 continue
 
-            # Payload
             payload: dict = {}
             for k in payload_cols:
                 v = row.get(k)
                 payload[k] = v if isinstance(v, (str, int, float, bool)) or v is None else str(v)
 
-            # Image
             image_url = ""
             image_path: Path | None = None
             pil_failed = False
@@ -255,8 +249,6 @@ class HuggingFaceAdapter:
                 path.write_bytes(normalized)
             return path
         except Exception as exc:
-            from rich import print as rprint
-
             rprint(f"[yellow]Warning: PIL image write failed for {record_id!r}: {exc}[/yellow]")
             return None
 
@@ -332,9 +324,8 @@ def run_inspect(
     else:
         cfg_dict["modality"] = "text"
 
-    payload_include = [c for c in string_cols if c != id_col_guess]
     cfg_dict["payload"] = {
-        "include": payload_include or None,
+        "include": non_id_strings or None,
         "indexes": {id_col_guess: "keyword"} if id_col_guess else {},
     }
 

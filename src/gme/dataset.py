@@ -1,5 +1,6 @@
 import json
 import uuid
+from pathlib import Path
 
 from rich import print
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
@@ -13,6 +14,21 @@ PAYLOAD_UUID_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # NA
 
 def _make_point_uuid(record_id: str) -> str:
     return str(uuid.uuid5(PAYLOAD_UUID_NAMESPACE, record_id))
+
+
+def _flush_to_db(
+    db_path: Path,
+    batch: list[dict],
+    pil_ok: list[tuple[str, str]],
+    pil_failed: list[str],
+) -> int:
+    with get_conn(db_path) as conn:
+        count = insert_records(conn, batch)
+        for article_id, sha256 in pil_ok:
+            set_image_status(conn, article_id, "ok", sha256)
+        for article_id in pil_failed:
+            set_image_status(conn, article_id, "failed", None)
+    return count
 
 
 def run_ingest(
@@ -61,12 +77,7 @@ def run_ingest(
                 pil_failed.append(record.record_id)
 
             if len(batch) >= 500:
-                with get_conn(settings.state_db) as conn:
-                    inserted_total += insert_records(conn, batch)
-                    for article_id, sha256 in pil_ok:
-                        set_image_status(conn, article_id, "ok", sha256)
-                    for article_id in pil_failed:
-                        set_image_status(conn, article_id, "failed", None)
+                inserted_total += _flush_to_db(settings.state_db, batch, pil_ok, pil_failed)
                 batch.clear()
                 pil_ok.clear()
                 pil_failed.clear()
@@ -74,12 +85,7 @@ def run_ingest(
             progress.advance(task)
 
     if batch:
-        with get_conn(settings.state_db) as conn:
-            inserted_total += insert_records(conn, batch)
-            for article_id, sha256 in pil_ok:
-                set_image_status(conn, article_id, "ok", sha256)
-            for article_id in pil_failed:
-                set_image_status(conn, article_id, "failed", None)
+        inserted_total += _flush_to_db(settings.state_db, batch, pil_ok, pil_failed)
 
     print(
         f"[green]Ingest complete.[/green] {adapter.total} rows processed, "
