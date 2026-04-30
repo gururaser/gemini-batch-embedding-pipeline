@@ -82,8 +82,6 @@ class DatasetConfig:
         cols: set[str] = set()
         if self.id_column:
             cols.add(self.id_column)
-        if self.image_column:
-            cols.add(self.image_column)
         cols.update(self.payload.exclude)
         return cols
 
