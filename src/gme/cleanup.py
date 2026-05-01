@@ -1,9 +1,16 @@
+from enum import Enum
 from pathlib import Path
 
 from rich.console import Console
 
 from gme.config import get_settings
 from gme.state import get_conn
+
+
+class CleanupScope(str, Enum):
+    ALL = "all"
+    SHARDS = "shards"
+    IMAGES = "images"
 
 
 def _fmt_bytes(n: int) -> str:
@@ -62,7 +69,16 @@ def _eligible_results(conn, batches_out_dir: Path) -> tuple[list[tuple[Path, int
     return eligible, total
 
 
-def run_cleanup(dry_run: bool = False) -> None:
+def _eligible_images(images_dir: Path) -> tuple[list[tuple[Path, int]], int]:
+    """Return (eligible_files, total_image_count) for all files in images_dir."""
+    if not images_dir.exists():
+        return [], 0
+    files = [f for f in images_dir.iterdir() if f.is_file()]
+    eligible = [(f, f.stat().st_size) for f in files]
+    return eligible, len(files)
+
+
+def run_cleanup(scope: CleanupScope = CleanupScope.ALL, dry_run: bool = False) -> None:
     console = Console()
     settings = get_settings()
 
@@ -70,27 +86,47 @@ def run_cleanup(dry_run: bool = False) -> None:
         console.print("[yellow]No state DB found. Run 'gme ingest' first.[/yellow]")
         raise SystemExit(1)
 
+    all_eligible = []
+    total_bytes = 0
+
     with get_conn(settings.state_db) as conn:
-        shards, total_shards = _eligible_shards(conn)
-        results, total_results = _eligible_results(conn, settings.batches_out_dir)
+        if scope in (CleanupScope.SHARDS, CleanupScope.ALL):
+            shards, total_shards = _eligible_shards(conn)
+            results, total_results = _eligible_results(conn, settings.batches_out_dir)
+            
+            shard_bytes = sum(s for _, s in shards)
+            result_bytes = sum(s for _, s in results)
+            
+            console.print(f"\n[bold]Shards[/bold] ({settings.batches_in_dir}):")
+            console.print(
+                f"  {len(shards)} of {total_shards} shards fully embedded"
+                f" — eligible for deletion ({_fmt_bytes(shard_bytes)})"
+            )
+            console.print(f"  {total_shards - len(shards)} shards skipped (still in progress)")
 
-    shard_bytes = sum(s for _, s in shards)
-    result_bytes = sum(s for _, s in results)
-    total_bytes = shard_bytes + result_bytes
+            console.print(f"\n[bold]Results[/bold] ({settings.batches_out_dir}):")
+            console.print(
+                f"  {len(results)} of {total_results} result files fully upserted"
+                f" — eligible for deletion ({_fmt_bytes(result_bytes)})"
+            )
+            console.print(f"  {total_results - len(results)} result files skipped (not yet upserted)")
+            
+            all_eligible.extend(shards)
+            all_eligible.extend(results)
+            total_bytes += shard_bytes + result_bytes
 
-    console.print(f"\n[bold]Shards[/bold] ({settings.batches_in_dir}):")
-    console.print(
-        f"  {len(shards)} of {total_shards} shards fully embedded"
-        f" — eligible for deletion ({_fmt_bytes(shard_bytes)})"
-    )
-    console.print(f"  {total_shards - len(shards)} shards skipped (still in progress)")
-
-    console.print(f"\n[bold]Results[/bold] ({settings.batches_out_dir}):")
-    console.print(
-        f"  {len(results)} of {total_results} result files fully upserted"
-        f" — eligible for deletion ({_fmt_bytes(result_bytes)})"
-    )
-    console.print(f"  {total_results - len(results)} result files skipped (not yet upserted)")
+        if scope in (CleanupScope.IMAGES, CleanupScope.ALL):
+            images, total_images = _eligible_images(settings.images_dir)
+            image_bytes = sum(s for _, s in images)
+            
+            console.print(f"\n[bold]Images[/bold] ({settings.images_dir}):")
+            console.print(
+                f"  {len(images)} of {total_images} images eligible for deletion "
+                f"({_fmt_bytes(image_bytes)})"
+            )
+            
+            all_eligible.extend(images)
+            total_bytes += image_bytes
 
     console.print(f"\nTotal reclaimable: [green]{_fmt_bytes(total_bytes)}[/green]")
 
@@ -98,8 +134,12 @@ def run_cleanup(dry_run: bool = False) -> None:
         console.print("\nRun without [bold]--dry-run[/bold] to delete.")
         return
 
+    if not all_eligible:
+        console.print("\nNo files to delete.")
+        return
+
     deleted = 0
-    for p, _ in shards + results:
+    for p, _ in all_eligible:
         p.unlink()
         deleted += 1
 

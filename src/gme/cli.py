@@ -119,14 +119,23 @@ def verify() -> None:
 
 @app.command("cleanup")
 def cleanup(
+    scope: str = typer.Option(
+        "all", "--scope", "-s", help="Scope of cleanup: shards | images | all"
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be deleted without deleting"
     ),
 ) -> None:
-    """Remove intermediate files (shards, results) that are no longer needed."""
-    from gme.cleanup import run_cleanup
+    """Remove intermediate files (shards, results, images) that are no longer needed."""
+    from gme.cleanup import CleanupScope, run_cleanup
 
-    run_cleanup(dry_run=dry_run)
+    try:
+        scope_enum = CleanupScope(scope.lower())
+    except ValueError:
+        console.print(f"[red]Invalid scope: {scope}. Must be one of: shards, images, all[/red]")
+        raise typer.Exit(1)
+
+    run_cleanup(scope=scope_enum, dry_run=dry_run)
 
 
 @app.command("inspect")
