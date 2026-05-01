@@ -113,8 +113,20 @@ def get_pending_image_records(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def get_embeddable_records(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_embeddable_records(
+    conn: sqlite3.Connection, modality: str = "multimodal"
+) -> list[sqlite3.Row]:
     """Retrieve records that are ready to be embedded."""
+    if modality == "text":
+        return conn.execute(
+            """
+            SELECT article_id, point_uuid, image_url, image_sha256, payload_json
+            FROM records
+            WHERE embed_status = 'pending'
+              AND embed_attempts < 3
+            ORDER BY article_id
+            """
+        ).fetchall()
     return conn.execute(
         """
         SELECT article_id, point_uuid, image_url, image_sha256, payload_json

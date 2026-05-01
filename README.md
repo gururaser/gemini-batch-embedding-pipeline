@@ -1,8 +1,8 @@
 # Gemini Multimodal Embeddings Pipeline
-ETL pipeline that generates multimodal (text + image) embeddings for H&M fashion products using the **Gemini Embedding 2** model via the **Gemini Batch API**, then stores them in **Qdrant** for vector search.
+ETL pipeline that generates embeddings for **any HuggingFace dataset** using the **Gemini Embedding 2** model via the **Gemini Batch API**, then stores them in **Qdrant** for vector search. Supports **text, image, and multimodal (text + image)** embedding modes. Ships with the H&M fashion products dataset as the default example.
 
 
-<img width="1693" height="929" alt="high-level-architecture" src="https://github.com/user-attachments/assets/8a2884ca-c647-4a9f-a949-828abfc4ebf0" />
+<img width="1693" height="929" alt="high-level-architecture-2" src="https://github.com/user-attachments/assets/4dffeaa8-2e3c-4f8f-9d4a-4d3e41b33f15" />
 
 
 
@@ -10,12 +10,28 @@ ETL pipeline that generates multimodal (text + image) embeddings for H&M fashion
 
 ```
 HuggingFace Dataset          Gemini Batch API             Qdrant (local)
-  Qdrant/hm_ecommerce    →   gemini-embedding-2    →    hm_products collection
-  ~105,000 products          text + image (base64)       1536-dim COSINE vectors
-                             1536-dim Matryoshka          + metadata payload
+  any HF dataset         →   gemini-embedding-2    →    configurable collection
+  configured via              text | image | both         1536-dim COSINE vectors
+  dataset.yaml               1536-dim Matryoshka          + metadata payload
+
+  Default: Qdrant/hm_ecommerce_products (~105K products)
 ```
 
-The pipeline is built around the Gemini Batch API (50% cost discount vs. synchronous calls) and enforces Tier 1 rate limits at 90%:
+The pipeline is driven by `dataset.yaml` and works with any HuggingFace dataset. `gme inspect` auto-generates a starter config from any HF dataset schema.
+
+### Modality Support
+
+The pipeline supports three embedding modalities, configured via the `modality` field in `dataset.yaml` or the `--modality` flag during ingestion:
+
+| Modality | Description | Required Fields |
+|---|---|---|
+| `text` | Embeds only text content. | `text_template` |
+| `image` | Embeds only the image. | `image_column` |
+| `multimodal` | (Default) Jointly embeds text and image into a single vector. | `text_template`, `image_column` |
+
+This flexibility allows you to use the same pipeline for pure text search, pure image search (reverse image search), or sophisticated multimodal search.
+
+It is built around the Gemini Batch API (50% cost discount vs. synchronous calls) and enforces Tier 1 rate limits at 90%:
 
 | Limit | Tier 1 | This pipeline |
 |---|---|---|
@@ -45,14 +61,14 @@ The pipeline is built around the Gemini Batch API (50% cost discount vs. synchro
 | 100,000 | $6.50 |
 | 1,000,000 | $65.00 |
 
-For the full ~105K dataset in this project, the estimated batch cost is **$6.80**.
+For the included H&M example dataset (~105K records), the estimated batch cost is **$6.80**.
 
 ### Architecture
 
 ```mermaid
 flowchart TD
     %% ── External services ──────────────────────────────────────────
-    HF{{HuggingFace\nQdrant/hm_ecommerce_products\n~105K products}}
+    HF{{HuggingFace\nany dataset\nconfigured via dataset.yaml}}
     GEMINI{{Gemini Batch API\ngemini-embedding-2\n1536-dim Matryoshka}}
     QDRANT_SVC{{Qdrant\nlocalhost:6333\nhm_products}}
 
@@ -92,7 +108,7 @@ flowchart TD
 
     %% ── Phase sequencing ───────────────────────────────────────────
     HF -->|"parquet stream"| P1
-    P1 -->|"105K records\nembed_status=pending"| P2
+    P1 -->|"N records\nembed_status=pending"| P2
     P2 -->|"image_status=ok"| P3
     P3 --> P4
     P4 -->|"SUCCEEDED batches"| P5
@@ -145,11 +161,13 @@ flowchart TD
 
 ## Dataset
 
-[Qdrant/hm_ecommerce_products](https://huggingface.co/datasets/Qdrant/hm_ecommerce_products) — 105,000 H&M product rows with:
+The pipeline works with **any HuggingFace dataset** that has text and/or image columns. Configuration lives in `dataset.yaml` — run `gme inspect --dataset <org/name> --generate-config` to auto-generate a starter config for any HF dataset, then edit as needed.
+
+The repo ships with [Qdrant/hm_ecommerce_products](https://huggingface.co/datasets/Qdrant/hm_ecommerce_products) as the default example — 105,000 H&M product rows with:
 - `text_to_embed` — concatenated product attributes (name, type, color, description)
 - `image_url` — S3-hosted product image
 
-Precomputed embedding columns (`dense_embedding`, `sparse_indices`, `sparse_values`) are dropped. All other columns are stored as Qdrant payload.
+Precomputed embedding columns (`dense_embedding`, `sparse_indices`, `sparse_values`) are excluded via `payload.exclude`. All other columns (including `image_url`) are stored as Qdrant payload.
 
 ## Requirements
 
@@ -174,6 +192,10 @@ cp .env.example .env
 
 # 4. Start local Qdrant
 docker compose up -d
+
+# 5. Point at your dataset (or keep the default H&M example)
+uv run gme inspect --dataset <org/name> --generate-config
+# Edit dataset.yaml as needed, then proceed with gme ingest
 ```
 
 ## Running the Pipeline
@@ -182,7 +204,7 @@ Each phase is independently runnable and fully **idempotent/resumable** — inte
 
 ### Pilot run (recommended first)
 
-Test end-to-end with 500 records before committing to the full 105K:
+Test end-to-end with 500 records before committing to the full dataset:
 
 ```bash
 make pilot
@@ -289,39 +311,77 @@ Deleted 100 files, reclaimed 94.5 MB.
 After a successful run, shard files (`data/batches/in/`) and result files (`data/batches/out/`) are no longer needed. Preview what's safe to delete, then reclaim the space:
 
 ```bash
-uv run gme cleanup --dry-run   # preview: shows file counts and sizes
-uv run gme cleanup             # delete eligible files
+uv run gme cleanup --dry-run              # preview: shows file counts and sizes
+uv run gme cleanup                        # delete shards, results, and images (default --scope all)
+uv run gme cleanup --scope shards         # delete only shard + result files
+uv run gme cleanup --scope images         # delete only cached images
 # or:
 make cleanup
 ```
 
-The command queries `state.db` to determine eligibility — only files whose records are fully embedded and upserted are deleted. Images, `state.db`, and `vectors.parquet` are never touched.
+The command queries `state.db` to determine eligibility — only files whose records are fully embedded and upserted are deleted. `state.db` and `vectors.parquet` are never touched. Use `--scope shards` to preserve the image cache.
+
+## Batch Management
+
+Three commands let you inspect and recover from Gemini batch job issues without touching `state.db` manually.
+
+| Command | Description |
+|---|---|
+| `gme batch-jobs [-n N]` | List the N most recent batch jobs from the Gemini API (default: 20) |
+| `gme batch-cancel <batch_id>` | Cancel an active job; its records are reset to `pending` for re-sharding |
+| `gme batch-delete <batch_id>` | Delete a completed or failed job; its records are reset to `pending` for re-sharding |
+
+Both `batch-cancel` and `batch-delete` prompt for confirmation unless `--yes / -y` is passed. The `batch_id` argument is the full job name returned by `batch-jobs` (e.g. `batches/123456`).
 
 ## Pipeline Phases
 
 | Command | Phase | Description |
 |---|---|---|
-| `gme ingest` | 1 | Load HF parquet → SQLite state DB |
+| `gme inspect --dataset <name> [--generate-config]` | — | Print HF dataset schema; optionally scaffold `dataset.yaml` |
+| `gme status` | — | Show current pipeline progress and batch job counts from state DB |
+| `gme ingest` | 1 | Load HF dataset → SQLite state DB (driven by `dataset.yaml`) |
 | `gme download-images` | 2 | Download + cache images as JPEG ≤512px |
 | `gme build-shards` | 3 | Partition records into JSONL batch files |
 | `gme submit` | 4 | Upload shards to Gemini, poll to completion |
 | `gme collect` | 5 | Download results → `vectors.parquet` |
-| `gme qdrant-init` | 6 | Create Qdrant collection + payload indexes |
+| `gme qdrant-init` | 6 | Create Qdrant collection + payload indexes (from `dataset.yaml`) |
 | `gme qdrant-upsert` | 7 | Upsert vectors + payloads into Qdrant |
 | `gme verify` | 8 | Count match, spot-check, self-search sanity |
-| `gme cleanup [--dry-run]` | — | Delete fully-processed shard and result files |
+| `gme cleanup [--scope all\|shards\|images] [--dry-run]` | — | Delete intermediate files by scope; default (`all`) deletes shards, results, and images |
+| `gme batch-jobs [-n N]` | — | List recent Gemini batch jobs (default: 20) |
+| `gme batch-cancel <batch_id> [-y]` | — | Cancel an active batch job; reset records for re-processing |
+| `gme batch-delete <batch_id> [-y]` | — | Delete a batch job; reset records for re-processing |
 
 ## Configuration
 
-All tunable via `.env`:
+### `dataset.yaml` — dataset mapping
+
+| Field | Description |
+|---|---|
+| `dataset` | HuggingFace dataset name (e.g. `Qdrant/hm_ecommerce_products`) |
+| `split` | Dataset split (default `train`) |
+| `id_column` | Column to use as the unique record ID (becomes point UUID seed) |
+| `text_template` | Python format string for text embedding (e.g. `"{title} {body}"`) |
+| `image_column` | Column containing image URLs (string) or PIL images |
+| `modality` | `text`, `image`, or `multimodal` |
+| `payload.include` | Explicit whitelist of columns to store in Qdrant (default: all except excluded) |
+| `payload.exclude` | Columns to drop from payload (e.g. precomputed embeddings) |
+| `payload.indexes` | Columns to index in Qdrant as `keyword` for fast filtering |
+
+Run `gme inspect --dataset <name> --generate-config` to generate a starter `dataset.yaml`.
+
+### `.env` — runtime tuning
 
 | Variable | Default | Description |
 |---|---|---|
 | `GEMINI_API_KEY` | — | Required |
+| `GEMINI_MODEL` | `gemini-embedding-2` | Gemini embedding model to use |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant endpoint |
+| `QDRANT_API_KEY` | — | Optional API key for Qdrant Cloud |
 | `QDRANT_COLLECTION` | `hm_products` | Collection name |
+| `DATA_DIR` | `data` | Base directory for all pipeline artifacts |
 | `EMBEDDING_DIM` | `1536` | Matryoshka output dim (128–3072) |
-| `RECORDS_PER_SHARD` | `100` | Records per batch job (~330 tokens/record: 259 image + ~70 text) |
+| `RECORDS_PER_SHARD` | `100` | Records per batch job (~330 tokens/record: 258 image + ~70 text) |
 | `MAX_CONCURRENT_JOBS` | `9` | Concurrent Gemini batch jobs |
 | `MAX_ENQUEUED_TOKENS` | `432000` | Token cap across in-flight jobs (90% of 500K) |
 | `IMAGE_DOWNLOAD_CONCURRENCY` | `32` | Parallel image downloads |
@@ -331,8 +391,8 @@ All tunable via `.env`:
 
 - **Vectors**: 1536-dim, COSINE distance, on-disk HNSW (`m=16`, `ef_construct=128`)
 - **Quantization**: Binary quantization (`always_ram=True`) — reduces index memory ~32× vs. float32
-- **Payload**: all dataset metadata columns except precomputed embeddings
-- **Payload indexes (KEYWORD)**: `product_type_name`, `product_group_name`, `colour_group_name`, `perceived_colour_master_name`, `index_group_name`, `garment_group_name`, `department_name`, `section_name`, `article_id`
+- **Payload**: all columns except `id_column` (becomes point UUID) and any explicit `payload.exclude`. `image_column` and text-template columns are kept as useful search-result metadata
+- **Payload indexes**: defined in `dataset.yaml` under `payload.indexes`. The included H&M example configures KEYWORD indexes on `article_id`, `product_type_name`, `product_group_name`, `colour_group_name`, `perceived_colour_master_name`, `index_group_name`, `garment_group_name`, `department_name`, `section_name`
 
 ### Point Example from Qdrant Collection
 <img width="1725" height="1100" alt="image" src="https://github.com/user-attachments/assets/222177a4-ec8d-44b6-bb30-e2844a4b498f" />
@@ -341,18 +401,20 @@ All tunable via `.env`:
 ## Project Structure
 
 ```
+dataset.yaml         # dataset mapping config (id / text / image / payload columns)
 src/gme/
+  adapters.py        # DatasetConfig, HuggingFaceAdapter, NormalizedRecord, gme inspect
   config.py          # pydantic-settings (env-driven)
   state.py           # SQLite WAL state store
-  dataset.py         # phase 1: ingest
+  dataset.py         # phase 1: ingest (thin wrapper over HuggingFaceAdapter)
   images.py          # phase 2: image download
-  batch_builder.py   # phase 3: JSONL shard builder
+  batch_builder.py   # phase 3: JSONL shard builder (modality-aware)
   batch_submit.py    # phase 4: Gemini Batch submit + poll daemon
   batch_collect.py   # phase 5: result collection → parquet
   qdrant_setup.py    # phase 6: collection + index creation
   qdrant_upsert.py   # phase 7: vector upsert
   verify.py          # phase 8: end-to-end verification
-  cleanup.py         # intermediate file cleanup (shards + results)
+  cleanup.py         # intermediate file cleanup (shards, results, images)
   cli.py             # Typer CLI entry point
 data/
   state.db           # SQLite pipeline state

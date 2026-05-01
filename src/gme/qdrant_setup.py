@@ -1,4 +1,3 @@
-
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     BinaryQuantization,
@@ -11,37 +10,22 @@ from qdrant_client.models import (
 )
 from rich import print
 
+from gme.adapters import DatasetConfig
 from gme.config import Settings, get_settings
-
-KEYWORD_INDEX_FIELDS = [
-    "article_id",
-    "product_type_name",
-    "product_group_name",
-    "colour_group_name",
-    "perceived_colour_master_name",
-    "index_group_name",
-    "garment_group_name",
-    "department_name",
-    "section_name",
-]
 
 
 def get_qdrant_client(settings: Settings) -> QdrantClient:
-    """Initialize and return a QdrantClient based on provided settings."""
     kwargs: dict = {"url": settings.qdrant_url}
     if settings.qdrant_api_key:
         kwargs["api_key"] = settings.qdrant_api_key
     return QdrantClient(**kwargs)
 
 
-def run_qdrant_init(settings: Settings | None = None) -> None:
-    """
-    Initialize the Qdrant collection with appropriate vector and payload configurations.
-    Enables binary quantization and on-disk storage for efficiency.
-    """
+def run_qdrant_init(settings: Settings | None = None, cfg: DatasetConfig | None = None) -> None:
     if settings is None:
         settings = get_settings()
-
+    if cfg is None:
+        cfg = DatasetConfig.from_yaml("dataset.yaml")
     client = get_qdrant_client(settings)
     collection = settings.qdrant_collection
 
@@ -71,14 +55,26 @@ def run_qdrant_init(settings: Settings | None = None) -> None:
             f"(dim={settings.embedding_dim}, COSINE, on-disk, binary quantization)."
         )
 
-    for field in KEYWORD_INDEX_FIELDS:
+    if not cfg.payload.indexes:
+        print("No payload indexes configured in dataset.yaml.")
+        return
+
+    for field_name, type_str in cfg.payload.indexes.items():
+        try:
+            schema_type = PayloadSchemaType(type_str)
+        except ValueError:
+            supported = [e.value for e in PayloadSchemaType]
+            raise ValueError(
+                f"Unknown index type {type_str!r} for field {field_name!r}. "
+                f"Supported: {supported}"
+            )
         try:
             client.create_payload_index(
                 collection_name=collection,
-                field_name=field,
-                field_schema=PayloadSchemaType.KEYWORD,
+                field_name=field_name,
+                field_schema=schema_type,
             )
         except Exception:
             pass  # index may already exist
 
-    print(f"Payload indexes ensured for: {', '.join(KEYWORD_INDEX_FIELDS)}")
+    print(f"Payload indexes ensured for: {', '.join(cfg.payload.indexes)}")

@@ -19,6 +19,7 @@ dependencies = [
     "typer>=0.13.0",
     "rich>=13.9.0",
     "tenacity>=9.0.0",
+    "pyyaml>=6.0",
     "python-dotenv>=1.0.0",
     "numpy>=2.0.0",
 ]

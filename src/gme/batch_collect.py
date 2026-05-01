@@ -99,7 +99,16 @@ def run_collect(settings: Settings | None = None) -> None:
 
     print(f"Collecting {len(succeeded)} completed batch(es)…")
 
-    total_ok = total_failed = 0
+    # Build point_uuid lookup from state DB once, outside the loop
+    with get_conn(settings.state_db) as conn:
+        uuid_map: dict[str, str] = {
+            row["article_id"]: row["point_uuid"]
+            for row in conn.execute("SELECT article_id, point_uuid FROM records").fetchall()
+        }
+
+    all_rows: list[dict] = []
+    all_ok_ids: list[str] = []
+    all_fail_ids: list[str] = []
 
     with Progress(
         SpinnerColumn(),
@@ -109,13 +118,6 @@ def run_collect(settings: Settings | None = None) -> None:
         transient=True,
     ) as progress:
         task = progress.add_task("Collecting batch results…", total=len(succeeded))
-
-        # Build point_uuid lookup from state DB
-        with get_conn(settings.state_db) as conn:
-            uuid_map: dict[str, str] = {
-                row["article_id"]: row["point_uuid"]
-                for row in conn.execute("SELECT article_id, point_uuid FROM records").fetchall()
-            }
 
         for row in succeeded:
             batch_id = row["batch_id"]
@@ -134,10 +136,6 @@ def run_collect(settings: Settings | None = None) -> None:
                 progress.advance(task)
                 continue
 
-            batch_rows: list[dict] = []
-            ok_ids: list[str] = []
-            fail_ids: list[str] = []
-
             with open(dest) as f:
                 for line in f:
                     line = line.strip()
@@ -148,12 +146,12 @@ def run_collect(settings: Settings | None = None) -> None:
 
                     if err or vector is None:
                         if article_id:
-                            fail_ids.append(article_id)
+                            all_fail_ids.append(article_id)
                         continue
 
                     # Validate dimension
                     if len(vector) != settings.embedding_dim:
-                        fail_ids.append(article_id)
+                        all_fail_ids.append(article_id)
                         continue
 
                     # Validate normalization (auto-normalized by Matryoshka)
@@ -165,27 +163,25 @@ def run_collect(settings: Settings | None = None) -> None:
                         )
 
                     point_uuid = uuid_map.get(article_id, "")
-                    batch_rows.append({
+                    all_rows.append({
                         "article_id": article_id,
                         "point_uuid": point_uuid,
                         "vector": [float(v) for v in vector],
                     })
-                    ok_ids.append(article_id)
+                    all_ok_ids.append(article_id)
 
-            if batch_rows:
-                _append_to_parquet(batch_rows, settings.vectors_parquet, settings.embedding_dim)
-
-            with get_conn(settings.state_db) as conn:
-                for aid in ok_ids:
-                    mark_embed_ok(conn, aid)
-                for aid in fail_ids:
-                    mark_embed_failed(conn, aid)
-
-            total_ok += len(ok_ids)
-            total_failed += len(fail_ids)
             progress.advance(task)
 
-    print(f"Collect complete. Vectors written: {total_ok}, failures: {total_failed}")
+    if all_rows:
+        _append_to_parquet(all_rows, settings.vectors_parquet, settings.embedding_dim)
+
+    with get_conn(settings.state_db) as conn:
+        for aid in all_ok_ids:
+            mark_embed_ok(conn, aid)
+        for aid in all_fail_ids:
+            mark_embed_failed(conn, aid)
+
+    print(f"Collect complete. Vectors written: {len(all_ok_ids)}, failures: {len(all_fail_ids)}")
     if settings.vectors_parquet.exists():
         tbl = pq.read_table(settings.vectors_parquet)
         print(f"vectors.parquet total rows: {len(tbl)}")

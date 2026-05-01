@@ -9,11 +9,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 uv sync                         # install all deps into .venv
 docker compose up -d            # start local Qdrant on :6333
 
+# Dataset config (for new datasets; H&M default ships as dataset.yaml)
+uv run gme inspect --dataset <hf/dataset> --generate-config  # scaffold dataset.yaml
+uv run gme inspect --dataset <hf/dataset>                    # print schema only
+
 # Run a phase
 uv run gme <phase>              # see phases below
 uv run gme status               # check progress from state.db
-uv run gme cleanup --dry-run    # preview reclaimable space (shards + results)
-uv run gme cleanup              # delete fully-processed intermediates
+
+# Cleanup
+uv run gme cleanup --dry-run              # preview reclaimable space
+uv run gme cleanup                        # delete shards, results, and images (default --scope all)
+uv run gme cleanup --scope shards         # delete only shard + result files
+uv run gme cleanup --scope images         # delete only cached images
+
+# Batch management
+uv run gme batch-jobs                     # list recent Gemini batch jobs
+uv run gme batch-cancel <batch_id> [-y]   # cancel active job; reset records to pending
+uv run gme batch-delete <batch_id> [-y]   # delete job; reset records to pending
 
 # Lint
 uv run ruff check src/
@@ -23,7 +36,7 @@ uv run ruff format src/
 make pilot    # ingest --limit 500, then all phases end-to-end
 make full     # same without --limit
 make verify
-make cleanup  # delete eligible intermediates (shards + results)
+make cleanup  # delete eligible intermediates (shards, results, and images)
 ```
 
 ## Pipeline Architecture
@@ -56,21 +69,25 @@ data/
 └── batches/out/          — <batch_id>.jsonl result files from Gemini
 ```
 
-`gme cleanup` deletes `batches/in/` and `batches/out/` files once state.db confirms all their records are fully embedded and upserted.
+`gme cleanup` (default `--scope all`) deletes `batches/in/`, `batches/out/`, and `images/` once state.db confirms eligibility. Use `--scope shards` to preserve the image cache, or `--scope images` to clear only images.
 
 ## Key Design Decisions
 
+**Generic dataset adapter** (`adapters.py`): `DatasetConfig` (loaded from `dataset.yaml`) drives the whole pipeline — which HF dataset, which columns are the ID / text / image, what goes in the Qdrant payload, and which payload fields get KEYWORD indexes. `HuggingFaceAdapter` normalises any HF dataset row into a `NormalizedRecord` and handles both URL-based and PIL-based image columns. `run_inspect` powers `gme inspect`.
+
 **SQLite as state store** (`state.py`): `records` table tracks per-row progress; `batches` table tracks Gemini batch job lifecycle. Always use `get_conn()` — it sets WAL mode, `busy_timeout=5000`, and auto-commits/rolls back.
 
-**Deterministic point IDs**: `uuid5(NAMESPACE_URL, article_id)` in `dataset.py`. Makes Qdrant upserts idempotent — re-running `qdrant-upsert` is always safe.
+**Deterministic point IDs**: `uuid5(NAMESPACE_URL, record_id)` in `dataset.py`. Makes Qdrant upserts idempotent — re-running `qdrant-upsert` is always safe.
 
-**Batch result parsing** (`batch_collect.py`): Each result JSONL line is `{"key": "<article_id>", "response": {"embeddings": [{"values": [...]}]}}` on success, or `{"key": "...", "error": {...}}` on per-record failure. Succeeded batches can still contain per-record errors — check both levels.
+**Batch result parsing** (`batch_collect.py`): Each result JSONL line is `{"key": "<article_id>", "response": {"embedding": {"values": [...]}}}` on success, or `{"key": "...", "error": {...}}` on per-record failure. Succeeded batches can still contain per-record errors — check both levels.
 
 **Image pipeline** (`images.py`): Downloaded async (httpx, HTTP/2, semaphore=32), normalized to JPEG at ≤512px longest side via PIL, stored at `data/images/<sha256>.jpg`. SHA256 filename makes the cache idempotent.
 
-**Shard JSONL format** (`batch_builder.py`): Each line is `{"key": "<article_id>", "request": {"contents": [...text + inline_data base64...], "config": {"output_dimensionality": 1536}}}`. Images are embedded inline as base64 — shards can be large.
+**Shard JSONL format** (`batch_builder.py`): Each line is `{"key": "<article_id>", "request": {"model": "...", "task_type": "...", "output_dimensionality": 1536, "content": {"parts": [...text + inline_data base64...]}}}`. Images are embedded inline as base64 — shards can be large.
 
-**Qdrant collection**: 1536-dim COSINE, on-disk vectors + HNSW, binary quantization (`always_ram=True` keeps quantized index hot), on-disk payload. `qdrant_setup.py` creates KEYWORD payload indexes on 9 low-cardinality fields.
+**Qdrant payload exclusion**: Only `id_column` is auto-excluded from the payload (it becomes the point UUID). `image_column` and text-template columns are kept as useful search-result metadata. Extra columns can be excluded via `payload.exclude` in `dataset.yaml`.
+
+**Qdrant collection**: 1536-dim COSINE, on-disk vectors + HNSW, binary quantization (`always_ram=True` keeps quantized index hot), on-disk payload. `qdrant_setup.py` reads KEYWORD payload index definitions from `DatasetConfig.payload.indexes`.
 
 ## Configuration
 
