@@ -160,6 +160,108 @@ def inspect(
     )
 
 
+@app.command("batch-jobs")
+def batch_jobs(
+    page_size: int = typer.Option(20, "--page-size", "-n", help="Max jobs to retrieve"),
+) -> None:
+    """List batch jobs from the Gemini API."""
+    from google import genai
+    from rich.table import Table
+
+    from gme.config import get_settings
+    from gme.state import get_conn
+
+    settings = get_settings()
+    client = genai.Client(api_key=settings.gemini_api_key)
+
+    jobs = list(client.batches.list(config={"page_size": page_size}))
+
+    if not jobs:
+        console.print("[yellow]No batch jobs found.[/yellow]")
+        return
+
+    local_states: dict[str, str] = {}
+    if settings.state_db.exists():
+        with get_conn(settings.state_db) as conn:
+            rows = conn.execute(
+                "SELECT batch_id, state FROM batches WHERE batch_id IS NOT NULL"
+            ).fetchall()
+            local_states = {r["batch_id"]: r["state"] for r in rows}
+
+    table = Table(title="Gemini Batch Jobs", show_lines=True)
+    table.add_column("Name", style="cyan")
+    table.add_column("Display Name")
+    table.add_column("State")
+    table.add_column("Local State")
+
+    for job in jobs:
+        state = str(job.state.name) if hasattr(job.state, "name") else str(job.state)
+        if "SUCCEEDED" in state:
+            state_markup = f"[green]{state}[/green]"
+        elif any(s in state for s in ("FAILED", "CANCELLED", "EXPIRED")):
+            state_markup = f"[red]{state}[/red]"
+        else:
+            state_markup = f"[yellow]{state}[/yellow]"
+
+        local = local_states.get(job.name, "[dim]—[/dim]")
+        table.add_row(job.name, getattr(job, "display_name", ""), state_markup, local)
+
+    console.print(table)
+    console.print(f"[dim]{len(jobs)} job(s) shown[/dim]")
+
+
+@app.command("batch-cancel")
+def batch_cancel(
+    batch_id: str = typer.Argument(..., help="Batch job name, e.g. batches/123456"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+) -> None:
+    """Cancel an active Gemini batch job and reset its records for re-processing."""
+    from google import genai
+
+    from gme.config import get_settings
+    from gme.state import get_conn, update_batch_state
+
+    if not yes:
+        typer.confirm(f"Cancel batch job '{batch_id}'?", abort=True)
+
+    settings = get_settings()
+    client = genai.Client(api_key=settings.gemini_api_key)
+
+    client.batches.cancel(name=batch_id)
+    console.print(f"[green]Cancelled: {batch_id}[/green]")
+
+    if settings.state_db.exists():
+        with get_conn(settings.state_db) as conn:
+            update_batch_state(conn, batch_id, "FAILED")
+        console.print(f"[dim]Local DB: {batch_id} → FAILED (records reset to pending)[/dim]")
+
+
+@app.command("batch-delete")
+def batch_delete(
+    batch_id: str = typer.Argument(..., help="Batch job name, e.g. batches/123456"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+) -> None:
+    """Delete a Gemini batch job and reset its records for re-processing."""
+    from google import genai
+
+    from gme.config import get_settings
+    from gme.state import get_conn, update_batch_state
+
+    if not yes:
+        typer.confirm(f"Delete batch job '{batch_id}'? This cannot be undone.", abort=True)
+
+    settings = get_settings()
+    client = genai.Client(api_key=settings.gemini_api_key)
+
+    client.batches.delete(name=batch_id)
+    console.print(f"[green]Deleted: {batch_id}[/green]")
+
+    if settings.state_db.exists():
+        with get_conn(settings.state_db) as conn:
+            update_batch_state(conn, batch_id, "FAILED")
+        console.print(f"[dim]Local DB: {batch_id} → FAILED (records reset to pending)[/dim]")
+
+
 @app.command("status")
 def status() -> None:
     """Show current pipeline progress from state DB."""
