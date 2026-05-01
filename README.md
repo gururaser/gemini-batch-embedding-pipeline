@@ -1,5 +1,5 @@
 # Gemini Multimodal Embeddings Pipeline
-ETL pipeline that generates multimodal (text + image) embeddings for **any HuggingFace dataset** using the **Gemini Embedding 2** model via the **Gemini Batch API**, then stores them in **Qdrant** for vector search. Ships with the H&M fashion products dataset as the default example.
+ETL pipeline that generates embeddings for **any HuggingFace dataset** using the **Gemini Embedding 2** model via the **Gemini Batch API**, then stores them in **Qdrant** for vector search. Supports **text, image, and multimodal (text + image)** embedding modes. Ships with the H&M fashion products dataset as the default example.
 
 
 <img width="1693" height="929" alt="high-level-architecture-2" src="https://github.com/user-attachments/assets/4dffeaa8-2e3c-4f8f-9d4a-4d3e41b33f15" />
@@ -11,13 +11,25 @@ ETL pipeline that generates multimodal (text + image) embeddings for **any Huggi
 ```
 HuggingFace Dataset          Gemini Batch API             Qdrant (local)
   any HF dataset         →   gemini-embedding-2    →    configurable collection
-  configured via              text + image (base64)       1536-dim COSINE vectors
+  configured via              text | image | both         1536-dim COSINE vectors
   dataset.yaml               1536-dim Matryoshka          + metadata payload
 
   Default: Qdrant/hm_ecommerce_products (~105K products)
 ```
 
 The pipeline is driven by `dataset.yaml` and works with any HuggingFace dataset. `gme inspect` auto-generates a starter config from any HF dataset schema.
+
+### Modality Support
+
+The pipeline supports three embedding modalities, configured via the `modality` field in `dataset.yaml` or the `--modality` flag during ingestion:
+
+| Modality | Description | Required Fields |
+|---|---|---|
+| `text` | Embeds only text content. | `text_template` |
+| `image` | Embeds only the image. | `image_column` |
+| `multimodal` | (Default) Jointly embeds text and image into a single vector. | `text_template`, `image_column` |
+
+This flexibility allows you to use the same pipeline for pure text search, pure image search (reverse image search), or sophisticated multimodal search.
 
 It is built around the Gemini Batch API (50% cost discount vs. synchronous calls) and enforces Tier 1 rate limits at 90%:
 
