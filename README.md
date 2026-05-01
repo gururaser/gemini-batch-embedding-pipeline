@@ -2,7 +2,7 @@
 ETL pipeline that generates multimodal (text + image) embeddings for **any HuggingFace dataset** using the **Gemini Embedding 2** model via the **Gemini Batch API**, then stores them in **Qdrant** for vector search. Ships with the H&M fashion products dataset as the default example.
 
 
-<img width="1693" height="929" alt="high-level-architecture" src="https://github.com/user-attachments/assets/8a2884ca-c647-4a9f-a949-828abfc4ebf0" />
+<img width="1693" height="929" alt="high-level-architecture-2" src="https://github.com/user-attachments/assets/4dffeaa8-2e3c-4f8f-9d4a-4d3e41b33f15" />
 
 
 
