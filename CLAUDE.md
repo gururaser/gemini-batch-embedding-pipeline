@@ -16,8 +16,17 @@ uv run gme inspect --dataset <hf/dataset>                    # print schema only
 # Run a phase
 uv run gme <phase>              # see phases below
 uv run gme status               # check progress from state.db
-uv run gme cleanup --dry-run    # preview reclaimable space (shards + results)
-uv run gme cleanup              # delete fully-processed intermediates
+
+# Cleanup
+uv run gme cleanup --dry-run              # preview reclaimable space
+uv run gme cleanup                        # delete shards, results, and images (default --scope all)
+uv run gme cleanup --scope shards         # delete only shard + result files
+uv run gme cleanup --scope images         # delete only cached images
+
+# Batch management
+uv run gme batch-jobs                     # list recent Gemini batch jobs
+uv run gme batch-cancel <batch_id> [-y]   # cancel active job; reset records to pending
+uv run gme batch-delete <batch_id> [-y]   # delete job; reset records to pending
 
 # Lint
 uv run ruff check src/
@@ -27,7 +36,7 @@ uv run ruff format src/
 make pilot    # ingest --limit 500, then all phases end-to-end
 make full     # same without --limit
 make verify
-make cleanup  # delete eligible intermediates (shards + results)
+make cleanup  # delete eligible intermediates (shards, results, and images)
 ```
 
 ## Pipeline Architecture
@@ -60,7 +69,7 @@ data/
 └── batches/out/          — <batch_id>.jsonl result files from Gemini
 ```
 
-`gme cleanup` deletes `batches/in/` and `batches/out/` files once state.db confirms all their records are fully embedded and upserted.
+`gme cleanup` (default `--scope all`) deletes `batches/in/`, `batches/out/`, and `images/` once state.db confirms eligibility. Use `--scope shards` to preserve the image cache, or `--scope images` to clear only images.
 
 ## Key Design Decisions
 
