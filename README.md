@@ -338,6 +338,7 @@ Both `batch-cancel` and `batch-delete` prompt for confirmation unless `--yes / -
 | Command | Phase | Description |
 |---|---|---|
 | `gme inspect --dataset <name> [--generate-config]` | — | Print HF dataset schema; optionally scaffold `dataset.yaml` |
+| `gme status` | — | Show current pipeline progress and batch job counts from state DB |
 | `gme ingest` | 1 | Load HF dataset → SQLite state DB (driven by `dataset.yaml`) |
 | `gme download-images` | 2 | Download + cache images as JPEG ≤512px |
 | `gme build-shards` | 3 | Partition records into JSONL batch files |
@@ -374,8 +375,11 @@ Run `gme inspect --dataset <name> --generate-config` to generate a starter `data
 | Variable | Default | Description |
 |---|---|---|
 | `GEMINI_API_KEY` | — | Required |
+| `GEMINI_MODEL` | `gemini-embedding-2` | Gemini embedding model to use |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant endpoint |
+| `QDRANT_API_KEY` | — | Optional API key for Qdrant Cloud |
 | `QDRANT_COLLECTION` | `hm_products` | Collection name |
+| `DATA_DIR` | `data` | Base directory for all pipeline artifacts |
 | `EMBEDDING_DIM` | `1536` | Matryoshka output dim (128–3072) |
 | `RECORDS_PER_SHARD` | `100` | Records per batch job (~330 tokens/record: 258 image + ~70 text) |
 | `MAX_CONCURRENT_JOBS` | `9` | Concurrent Gemini batch jobs |
@@ -410,7 +414,7 @@ src/gme/
   qdrant_setup.py    # phase 6: collection + index creation
   qdrant_upsert.py   # phase 7: vector upsert
   verify.py          # phase 8: end-to-end verification
-  cleanup.py         # intermediate file cleanup (shards + results)
+  cleanup.py         # intermediate file cleanup (shards, results, images)
   cli.py             # Typer CLI entry point
 data/
   state.db           # SQLite pipeline state
