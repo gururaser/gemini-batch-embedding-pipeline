@@ -1,5 +1,5 @@
 # Gemini Multimodal Embeddings Pipeline
-ETL pipeline that generates multimodal (text + image) embeddings for H&M fashion products using the **Gemini Embedding 2** model via the **Gemini Batch API**, then stores them in **Qdrant** for vector search.
+ETL pipeline that generates multimodal (text + image) embeddings for **any HuggingFace dataset** using the **Gemini Embedding 2** model via the **Gemini Batch API**, then stores them in **Qdrant** for vector search. Ships with the H&M fashion products dataset as the default example.
 
 
 <img width="1693" height="929" alt="high-level-architecture" src="https://github.com/user-attachments/assets/8a2884ca-c647-4a9f-a949-828abfc4ebf0" />
@@ -49,14 +49,14 @@ It is built around the Gemini Batch API (50% cost discount vs. synchronous calls
 | 100,000 | $6.50 |
 | 1,000,000 | $65.00 |
 
-For the full ~105K dataset in this project, the estimated batch cost is **$6.80**.
+For the included H&M example dataset (~105K records), the estimated batch cost is **$6.80**.
 
 ### Architecture
 
 ```mermaid
 flowchart TD
     %% ── External services ──────────────────────────────────────────
-    HF{{HuggingFace\nQdrant/hm_ecommerce_products\n~105K products}}
+    HF{{HuggingFace\nany dataset\nconfigured via dataset.yaml}}
     GEMINI{{Gemini Batch API\ngemini-embedding-2\n1536-dim Matryoshka}}
     QDRANT_SVC{{Qdrant\nlocalhost:6333\nhm_products}}
 
@@ -96,7 +96,7 @@ flowchart TD
 
     %% ── Phase sequencing ───────────────────────────────────────────
     HF -->|"parquet stream"| P1
-    P1 -->|"105K records\nembed_status=pending"| P2
+    P1 -->|"N records\nembed_status=pending"| P2
     P2 -->|"image_status=ok"| P3
     P3 --> P4
     P4 -->|"SUCCEEDED batches"| P5
@@ -149,13 +149,13 @@ flowchart TD
 
 ## Dataset
 
-The pipeline is configured by `dataset.yaml` in the repo root. The default ships with [Qdrant/hm_ecommerce_products](https://huggingface.co/datasets/Qdrant/hm_ecommerce_products) — 105,000 H&M product rows with:
+The pipeline works with **any HuggingFace dataset** that has text and/or image columns. Configuration lives in `dataset.yaml` — run `gme inspect --dataset <org/name> --generate-config` to auto-generate a starter config for any HF dataset, then edit as needed.
+
+The repo ships with [Qdrant/hm_ecommerce_products](https://huggingface.co/datasets/Qdrant/hm_ecommerce_products) as the default example — 105,000 H&M product rows with:
 - `text_to_embed` — concatenated product attributes (name, type, color, description)
 - `image_url` — S3-hosted product image
 
 Precomputed embedding columns (`dense_embedding`, `sparse_indices`, `sparse_values`) are excluded via `payload.exclude`. All other columns (including `image_url`) are stored as Qdrant payload.
-
-To use a different dataset, run `gme inspect --dataset <org/name> --generate-config` to scaffold a new `dataset.yaml`, then edit as needed.
 
 ## Requirements
 
@@ -181,7 +181,7 @@ cp .env.example .env
 # 4. Start local Qdrant
 docker compose up -d
 
-# 5. (Optional) Use a different HuggingFace dataset
+# 5. Point at your dataset (or keep the default H&M example)
 uv run gme inspect --dataset <org/name> --generate-config
 # Edit dataset.yaml as needed, then proceed with gme ingest
 ```
@@ -192,7 +192,7 @@ Each phase is independently runnable and fully **idempotent/resumable** — inte
 
 ### Pilot run (recommended first)
 
-Test end-to-end with 500 records before committing to the full 105K:
+Test end-to-end with 500 records before committing to the full dataset:
 
 ```bash
 make pilot
@@ -299,13 +299,27 @@ Deleted 100 files, reclaimed 94.5 MB.
 After a successful run, shard files (`data/batches/in/`) and result files (`data/batches/out/`) are no longer needed. Preview what's safe to delete, then reclaim the space:
 
 ```bash
-uv run gme cleanup --dry-run   # preview: shows file counts and sizes
-uv run gme cleanup             # delete eligible files
+uv run gme cleanup --dry-run              # preview: shows file counts and sizes
+uv run gme cleanup                        # delete shards, results, and images (default --scope all)
+uv run gme cleanup --scope shards         # delete only shard + result files
+uv run gme cleanup --scope images         # delete only cached images
 # or:
 make cleanup
 ```
 
-The command queries `state.db` to determine eligibility — only files whose records are fully embedded and upserted are deleted. Images, `state.db`, and `vectors.parquet` are never touched.
+The command queries `state.db` to determine eligibility — only files whose records are fully embedded and upserted are deleted. `state.db` and `vectors.parquet` are never touched. Use `--scope shards` to preserve the image cache.
+
+## Batch Management
+
+Three commands let you inspect and recover from Gemini batch job issues without touching `state.db` manually.
+
+| Command | Description |
+|---|---|
+| `gme batch-jobs [-n N]` | List the N most recent batch jobs from the Gemini API (default: 20) |
+| `gme batch-cancel <batch_id>` | Cancel an active job; its records are reset to `pending` for re-sharding |
+| `gme batch-delete <batch_id>` | Delete a completed or failed job; its records are reset to `pending` for re-sharding |
+
+Both `batch-cancel` and `batch-delete` prompt for confirmation unless `--yes / -y` is passed. The `batch_id` argument is the full job name returned by `batch-jobs` (e.g. `batches/123456`).
 
 ## Pipeline Phases
 
@@ -320,7 +334,10 @@ The command queries `state.db` to determine eligibility — only files whose rec
 | `gme qdrant-init` | 6 | Create Qdrant collection + payload indexes (from `dataset.yaml`) |
 | `gme qdrant-upsert` | 7 | Upsert vectors + payloads into Qdrant |
 | `gme verify` | 8 | Count match, spot-check, self-search sanity |
-| `gme cleanup [--dry-run]` | — | Delete fully-processed shard and result files |
+| `gme cleanup [--scope all\|shards\|images] [--dry-run]` | — | Delete intermediate files by scope; default (`all`) deletes shards, results, and images |
+| `gme batch-jobs [-n N]` | — | List recent Gemini batch jobs (default: 20) |
+| `gme batch-cancel <batch_id> [-y]` | — | Cancel an active batch job; reset records for re-processing |
+| `gme batch-delete <batch_id> [-y]` | — | Delete a batch job; reset records for re-processing |
 
 ## Configuration
 
@@ -348,7 +365,7 @@ Run `gme inspect --dataset <name> --generate-config` to generate a starter `data
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant endpoint |
 | `QDRANT_COLLECTION` | `hm_products` | Collection name |
 | `EMBEDDING_DIM` | `1536` | Matryoshka output dim (128–3072) |
-| `RECORDS_PER_SHARD` | `100` | Records per batch job (~330 tokens/record: 259 image + ~70 text) |
+| `RECORDS_PER_SHARD` | `100` | Records per batch job (~330 tokens/record: 258 image + ~70 text) |
 | `MAX_CONCURRENT_JOBS` | `9` | Concurrent Gemini batch jobs |
 | `MAX_ENQUEUED_TOKENS` | `432000` | Token cap across in-flight jobs (90% of 500K) |
 | `IMAGE_DOWNLOAD_CONCURRENCY` | `32` | Parallel image downloads |
@@ -359,7 +376,7 @@ Run `gme inspect --dataset <name> --generate-config` to generate a starter `data
 - **Vectors**: 1536-dim, COSINE distance, on-disk HNSW (`m=16`, `ef_construct=128`)
 - **Quantization**: Binary quantization (`always_ram=True`) — reduces index memory ~32× vs. float32
 - **Payload**: all columns except `id_column` (becomes point UUID) and any explicit `payload.exclude`. `image_column` and text-template columns are kept as useful search-result metadata
-- **Payload indexes**: defined in `dataset.yaml` under `payload.indexes`. Default for H&M: KEYWORD indexes on `article_id`, `product_type_name`, `product_group_name`, `colour_group_name`, `perceived_colour_master_name`, `index_group_name`, `garment_group_name`, `department_name`, `section_name`
+- **Payload indexes**: defined in `dataset.yaml` under `payload.indexes`. The included H&M example configures KEYWORD indexes on `article_id`, `product_type_name`, `product_group_name`, `colour_group_name`, `perceived_colour_master_name`, `index_group_name`, `garment_group_name`, `department_name`, `section_name`
 
 ### Point Example from Qdrant Collection
 <img width="1725" height="1100" alt="image" src="https://github.com/user-attachments/assets/222177a4-ec8d-44b6-bb30-e2844a4b498f" />
